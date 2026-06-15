@@ -1,0 +1,20 @@
+# source data (large files, reproducible via etl/00_download.sh)
+data/raw/
+data/processed/
+data/neo4j/
+
+# secrets
+.env
+
+# python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# node
+node_modules/
+dist/
+
+# os / editor
+.DS_Store

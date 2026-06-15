@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+neo4j>=5.0
+openai
+APScheduler>=3.10,<4.0
+httpx
+pydantic
+pydantic-settings
+pytest
+pytest-asyncio
+python-dotenv

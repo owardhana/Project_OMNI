@@ -1,0 +1,55 @@
+# OmniGraph — local dev stack.
+#
+# Typical workflow (see 03_structure.md):
+#   docker compose up neo4j -d      # only Neo4j runs in Docker for dev
+#   uvicorn backend.main:app --reload
+#   cd frontend && npm run dev
+#
+# The `backend` and `frontend` services are defined for a full containerized
+# run (`docker compose up`). For day-to-day development only `neo4j` is needed.
+
+services:
+  neo4j:
+    image: neo4j:5
+    container_name: omnigraph-neo4j
+    ports:
+      - "7474:7474"   # HTTP browser
+      - "7687:7687"   # Bolt
+    environment:
+      NEO4J_AUTH: neo4j/changeme
+      NEO4J_PLUGINS: '["apoc"]'
+      # Allow APOC procedures (plugin is loaded per NEO4J_PLUGINS above).
+      NEO4J_dbms_security_procedures_unrestricted: "apoc.*"
+      # Reasonable memory defaults for a laptop loading ~250k nodes.
+      NEO4J_server_memory_heap_initial__size: "1G"
+      NEO4J_server_memory_heap_max__size: "2G"
+      NEO4J_server_memory_pagecache_size: "1G"
+    volumes:
+      - ./data/neo4j:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  backend:
+    build: ./backend
+    container_name: omnigraph-backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      # Inside the compose network Neo4j is reachable by service name.
+      NEO4J_URI: bolt://neo4j:7687
+    depends_on:
+      neo4j:
+        condition: service_healthy
+
+  frontend:
+    build: ./frontend
+    container_name: omnigraph-frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
