@@ -4,10 +4,22 @@ import type { FGLink, FGNode, GraphNode } from '../types/graph';
 
 export type LayerKey = 'genomics' | 'transcriptomics';
 
+// Layer z-centers are symmetric around the origin so the soft forceZ that pins
+// nodes to their layer plays nicely with react-force-graph's centering force
+// (which keeps the graph centroid near 0,0,0).
 export const LAYERS: Record<LayerKey, { z: number; color: string; label: string }> = {
-  genomics: { z: 0, color: '#f59e0b', label: 'Genomics' },
-  transcriptomics: { z: 300, color: '#60a5fa', label: 'Transcriptomics' },
+  genomics: { z: -150, color: '#f59e0b', label: 'Genomics' },
+  transcriptomics: { z: 150, color: '#60a5fa', label: 'Transcriptomics' },
 };
+
+// Soft-layout tuning (see useGraph.ts). Genes sit on the genomics plane and
+// transcripts on the transcriptomics plane; nodes with cross-layer edges drift
+// toward the other layer, and a deterministic jitter keeps planes from looking
+// perfectly flat.
+export const GENE_Z = LAYERS.genomics.z;
+export const TRANSCRIPT_Z = LAYERS.transcriptomics.z;
+export const INTERLAYER_NUDGE = 55; // drift toward the other layer
+export const Z_JITTER = 38; // +/- deterministic per-node jitter
 
 export const NODE_COLORS = {
   tf: '#f59e0b', // amber — Gene with outgoing REGULATES

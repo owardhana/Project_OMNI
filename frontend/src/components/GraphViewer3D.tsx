@@ -19,7 +19,11 @@ interface Props {
   onEdgeHover: (link: FGLink | null) => void;
 }
 
-const PLANE_SIZE = 900;
+const PLANE_SIZE = 1100;
+// Side-profile camera: offset mostly along +X with a slight elevation, looking
+// at the origin. The layer-separation axis (world Z) then runs across the
+// screen so the two layers read as distinct stacked clouds, not top-down.
+const CAMERA = { x: 820, y: 150, z: 0 };
 
 function resolveEndpoint(end: string | FGNode): FGNode | null {
   return typeof end === 'object' ? end : null;
@@ -32,13 +36,12 @@ export default function GraphViewer3D({
   onBackgroundClick,
   onEdgeHover,
 }: Props) {
-  // Loose ref: react-force-graph exposes scene()/camera() at runtime.
+  // Loose ref: react-force-graph exposes scene()/camera()/d3Force() at runtime.
   const fgRef = useRef<any>(null);
   const planesRef = useRef<Record<string, THREE.Mesh>>({});
+  const initRef = useRef(false);
 
-  // Add the two semi-transparent layer planes to the scene on mount, and remove
-  // them on unmount (empty deps + cleanup so StrictMode's remount re-adds them to
-  // the live scene and disposes the discarded ones).
+  // Add the two semi-transparent layer planes on mount; remove on unmount.
   useEffect(() => {
     const scene = fgRef.current?.scene?.();
     if (!scene) return;
@@ -49,7 +52,7 @@ export default function GraphViewer3D({
       const material = new THREE.MeshBasicMaterial({
         color: layer.color,
         transparent: true,
-        opacity: 0.06,
+        opacity: 0.05,
         side: THREE.DoubleSide,
         depthWrite: false,
       });
@@ -76,6 +79,24 @@ export default function GraphViewer3D({
     });
   }, [visibleLayers]);
 
+  // Once the first graph arrives: loosen charge for a roomy X/Y spread within
+  // each layer (Z is pinned per-node via fz = layer target), then swing the
+  // camera to the side profile. Runs once so manual rotation is preserved after.
+  useEffect(() => {
+    const fg = fgRef.current;
+    if (!fg || data.nodes.length === 0 || initRef.current) return;
+    initRef.current = true;
+
+    const charge = fg.d3Force('charge');
+    if (charge?.strength) charge.strength(-55);
+    fg.d3ReheatSimulation?.();
+
+    const timer = setTimeout(() => {
+      fg.cameraPosition?.(CAMERA, { x: 0, y: 0, z: 0 }, 2200);
+    }, 1400);
+    return () => clearTimeout(timer);
+  }, [data]);
+
   // Dev-only test hook: expose the force-graph instance + current data so an
   // end-to-end script can map 3D nodes to screen coordinates. Harmless in prod.
   useEffect(() => {
@@ -89,16 +110,19 @@ export default function GraphViewer3D({
     <ForceGraph3D
       ref={fgRef}
       graphData={data}
-      backgroundColor="#0b0f1a"
+      backgroundColor="#070b16"
+      showNavInfo={false}
       nodeId="id"
+      nodeResolution={16}
+      nodeOpacity={0.92}
+      nodeRelSize={4}
       nodeLabel={(n: FGNode) =>
         n.node_type === 'gene'
-          ? `${n.hgnc_symbol ?? n.ensembl_id}${n.is_tf ? ' (TF)' : ''}`
-          : `${n.hgnc_symbol ?? n.ensembl_tx_id}`
+          ? `${n.hgnc_symbol ?? n.ensembl_id}${n.is_tf ? ' · TF' : ' · Gene'}`
+          : `${n.hgnc_symbol ?? n.ensembl_tx_id} · Transcript`
       }
       nodeColor={(n: FGNode) => nodeColor(n)}
       nodeVal={(n: FGNode) => nodeSize(n)}
-      nodeOpacity={0.95}
       nodeVisibility={(n: FGNode) => visibleLayers[nodeLayer(n)] ?? true}
       linkVisibility={(l: FGLink) => {
         const s = resolveEndpoint(l.source);
@@ -110,10 +134,14 @@ export default function GraphViewer3D({
         );
       }}
       linkColor={(l: FGLink) => edgeColor(l)}
-      linkOpacity={0.55}
-      linkWidth={1}
-      linkDirectionalArrowLength={3.5}
+      linkOpacity={0.45}
+      linkWidth={0.6}
+      linkDirectionalArrowLength={2.5}
       linkDirectionalArrowRelPos={1}
+      linkDirectionalParticles={2}
+      linkDirectionalParticleWidth={1.6}
+      linkDirectionalParticleSpeed={0.006}
+      linkDirectionalParticleColor={(l: FGLink) => edgeColor(l)}
       onNodeClick={(n: FGNode) => onNodeClick(n)}
       onBackgroundClick={() => onBackgroundClick()}
       onLinkHover={(l: FGLink | null) => onEdgeHover(l)}

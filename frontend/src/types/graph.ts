@@ -71,7 +71,8 @@ export type FGNode = GraphNode & {
   x?: number;
   y?: number;
   z?: number;
-  fz?: number;
+  zTarget?: number; // layer target (see useGraph)
+  fz?: number; // pinned z = zTarget; X/Y stay free
 };
 
 export type FGLink = GraphEdge & {

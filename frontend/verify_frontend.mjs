@@ -110,24 +110,25 @@ await page.waitForSelector('.query-answer', { timeout: 90000 });
 const answer = (await page.textContent('.query-answer')) || '';
 check('6 query returns answer', answer.trim().length > 15, answer.slice(0, 50).replace(/\n/g, ' '));
 
-// 8. Hover an edge -> edge detail panel. Hide transcripts again to expose
-// gene-gene REGULATES links, then sample densely along a link.
-await txInput.click();
-await page.waitForTimeout(1200);
+// 8. Hover an edge -> edge detail panel. From the side-profile camera the
+// genomics layer is edge-on, so gene-gene edges are foreshortened; the cleanly
+// hoverable edges are the interlayer PRODUCES "bridges" that span the view.
+// Keep both layers visible and sample densely along those.
+await page.waitForTimeout(800);
 let edgeOk = false;
-const linkCount = await page.evaluate(
+const bridgeCount = await page.evaluate(
   () =>
     window.__omniData.links.filter(
-      (x) => typeof x.source === 'object' && x.source.x != null && x.rel_type === 'REGULATES',
+      (x) => typeof x.source === 'object' && x.source.x != null && x.rel_type === 'PRODUCES',
     ).length,
 );
-outer: for (let li = 0; li < Math.min(linkCount, 8); li++) {
-  for (const f of [0.5, 0.45, 0.55, 0.4, 0.6, 0.35, 0.65]) {
+outer: for (let li = 0; li < Math.min(bridgeCount, 12); li++) {
+  for (const f of [0.5, 0.45, 0.55, 0.4, 0.6, 0.35, 0.65, 0.3, 0.7]) {
     const hp = await page.evaluate(
       ({ li, f }) => {
         const d = window.__omniData, fg = window.__omniFG;
         const links = d.links.filter(
-          (x) => typeof x.source === 'object' && x.source.x != null && x.rel_type === 'REGULATES',
+          (x) => typeof x.source === 'object' && x.source.x != null && x.rel_type === 'PRODUCES',
         );
         const l = links[li];
         const a = fg.graph2ScreenCoords(l.source.x, l.source.y, l.source.z);
@@ -137,7 +138,7 @@ outer: for (let li = 0; li < Math.min(linkCount, 8); li++) {
       { li, f },
     );
     await page.mouse.move(hp.x, hp.y);
-    await page.waitForTimeout(250);
+    await page.waitForTimeout(220);
     if (await page.isVisible('.edge-panel')) {
       edgeOk = true;
       break outer;
