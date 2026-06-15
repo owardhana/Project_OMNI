@@ -2,3 +2,4 @@ neo4j
 pandas
 httpx
 python-dotenv
+pyreadr
