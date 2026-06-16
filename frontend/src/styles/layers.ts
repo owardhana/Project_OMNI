@@ -1,61 +1,87 @@
-// Layer config + node/edge color and size helpers (graphite model).
+// Layer config + node/edge color and size helpers (graphite model, 3 layers).
 
 import type { FGLink, FGNode, GraphNode } from '../types/graph';
 
-export type LayerKey = 'genomics' | 'transcriptomics';
+export type LayerKey = 'genomics' | 'transcriptomics' | 'proteomics';
 
-// Layer z-centers are symmetric around the origin so the soft forceZ that pins
-// nodes to their layer plays nicely with react-force-graph's centering force
-// (which keeps the graph centroid near 0,0,0).
-export const LAYERS: Record<LayerKey, { z: number; color: string; label: string }> = {
-  genomics: { z: -150, color: '#f59e0b', label: 'Genomics' },
-  transcriptomics: { z: 150, color: '#60a5fa', label: 'Transcriptomics' },
+// Three stacked omics layers (ADR-0004), stacked along the VERTICAL axis (world
+// Y) so genomics reads at the bottom of the screen and proteomics at the top.
+// Y-centres are symmetric around the origin and widely spaced so the force layout
+// reads as distinct stacked planes (a web across layers), not one clump. The
+// camera is soft-locked (orbit, constrained polar angle) so this never flips.
+export const LAYERS: Record<
+  LayerKey,
+  { y: number; color: string; label: string }
+> = {
+  genomics: { y: -300, color: '#6b7280', label: 'Genomics' },
+  transcriptomics: { y: 0, color: '#6b7280', label: 'Transcriptomics' },
+  proteomics: { y: 300, color: '#6b7280', label: 'Proteomics' },
 };
 
-// Soft-layout tuning (see useGraph.ts). Genes sit on the genomics plane and
-// transcripts on the transcriptomics plane; nodes with cross-layer edges drift
-// toward the other layer, and a deterministic jitter keeps planes from looking
-// perfectly flat.
-export const GENE_Z = LAYERS.genomics.z;
-export const TRANSCRIPT_Z = LAYERS.transcriptomics.z;
-export const INTERLAYER_NUDGE = 55; // drift toward the other layer
-export const Z_JITTER = 38; // +/- deterministic per-node jitter
+export const GENE_Y = LAYERS.genomics.y;
+export const TRANSCRIPT_Y = LAYERS.transcriptomics.y;
+export const PROTEIN_Y = LAYERS.proteomics.y;
+export const Y_JITTER = 42; // +/- deterministic per-node jitter so planes aren't flat
 
+// Node colors: saturated color lives only on the graph (neutral chrome elsewhere).
+// A TF is a protein subtype -> amber; genes green; transcripts blue.
 export const NODE_COLORS = {
-  tf: '#f59e0b', // amber — Gene with outgoing REGULATES
-  gene: '#4ade80', // green — Gene (no outgoing REGULATES)
-  transcript: '#60a5fa', // blue — Transcript
+  protein_tf: '#f59e0b', // amber — transcription-factor protein
+  protein: '#c084fc', // violet — other protein subtypes (future)
+  gene: '#4ade80', // green — gene
+  transcript: '#60a5fa', // blue — transcript
 };
 
 export const EDGE_COLORS = {
   activator: '#22c55e',
   repressor: '#ef4444',
-  produces: '#a78bfa',
+  produces: '#60a5fa',
+  translates: '#a78bfa',
+  encodes: '#a78bfa',
   unknown: '#9ca3af',
 };
 
 export const NODE_SIZES = {
-  tf: 12,
+  protein: 13, // TF hubs read large
   gene: 8,
-  transcript: 6,
+  transcript: 5,
 };
 
 export function nodeLayer(node: GraphNode): LayerKey {
-  return node.node_type === 'transcript' ? 'transcriptomics' : 'genomics';
+  if (node.node_type === 'transcript') return 'transcriptomics';
+  if (node.node_type === 'protein') return 'proteomics';
+  return 'genomics';
 }
 
 export function nodeColor(node: FGNode): string {
   if (node.node_type === 'transcript') return NODE_COLORS.transcript;
-  return node.is_tf ? NODE_COLORS.tf : NODE_COLORS.gene;
+  if (node.node_type === 'protein') {
+    return node.subtype === 'transcription_factor'
+      ? NODE_COLORS.protein_tf
+      : NODE_COLORS.protein;
+  }
+  return NODE_COLORS.gene;
 }
 
 export function nodeSize(node: FGNode): number {
   if (node.node_type === 'transcript') return NODE_SIZES.transcript;
-  return node.is_tf ? NODE_SIZES.tf : NODE_SIZES.gene;
+  if (node.node_type === 'protein') return NODE_SIZES.protein;
+  return NODE_SIZES.gene;
+}
+
+// Node shape per layer reinforces the identity system (color + layer + shape):
+// gene = sphere, transcript = octahedron, protein = box.
+export type NodeShape = 'sphere' | 'octahedron' | 'box';
+export function nodeShape(node: GraphNode): NodeShape {
+  if (node.node_type === 'transcript') return 'octahedron';
+  if (node.node_type === 'protein') return 'box';
+  return 'sphere';
 }
 
 export function edgeColor(link: FGLink): string {
   if (link.rel_type === 'PRODUCES') return EDGE_COLORS.produces;
+  if (link.rel_type === 'TRANSLATES_TO') return EDGE_COLORS.translates;
+  if (link.rel_type === 'ENCODES') return EDGE_COLORS.encodes;
   if (link.mode === 'activator') return EDGE_COLORS.activator;
   if (link.mode === 'repressor') return EDGE_COLORS.repressor;
   return EDGE_COLORS.unknown;

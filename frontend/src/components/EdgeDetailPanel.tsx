@@ -2,6 +2,7 @@ import type { FGLink, FGNode } from '../types/graph';
 
 interface Props {
   link: FGLink | null;
+  onClose?: () => void; // present when the edge is pinned (clicked), not hovered
 }
 
 function endpointLabel(end: string | FGNode): string {
@@ -11,13 +12,18 @@ function endpointLabel(end: string | FGNode): string {
   return end;
 }
 
-export default function EdgeDetailPanel({ link }: Props) {
+export default function EdgeDetailPanel({ link, onClose }: Props) {
   if (!link) return null;
 
   const weights = link.tissue_weights ?? null;
 
   return (
     <div className="edge-panel">
+      {onClose && (
+        <button className="edge-panel-close" onClick={onClose} aria-label="Close">
+          ×
+        </button>
+      )}
       <div className="edge-panel-title">
         {endpointLabel(link.source)} → {endpointLabel(link.target)}
       </div>

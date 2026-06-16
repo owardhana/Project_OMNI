@@ -40,11 +40,13 @@ export const api = {
   getGene: (symbol: string) =>
     getJSON<GeneNode>(`/api/gene/${encodeURIComponent(symbol)}`),
 
-  getGeneGraph: (symbol: string, tissue = 'all', hops = 1) =>
+  // Signal-decay traversal (ADR-0005); optional max_nodes overrides the server
+  // default. Tissue is NOT sent — it is a render-time opacity concern (ADR-0006).
+  getGeneGraph: (symbol: string, maxNodes?: number) =>
     getJSON<GraphResponse>(
-      `/api/gene/${encodeURIComponent(symbol)}/graph?tissue=${encodeURIComponent(
-        tissue,
-      )}&hops=${hops}`,
+      `/api/gene/${encodeURIComponent(symbol)}/graph${
+        maxNodes != null ? `?max_nodes=${maxNodes}` : ''
+      }`,
     ),
 
   getTranscript: (ensemblTxId: string) =>

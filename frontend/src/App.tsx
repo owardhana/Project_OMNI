@@ -20,34 +20,34 @@ export default function App() {
   const [visibleLayers, setVisibleLayers] = useState<Record<string, boolean>>({
     genomics: true,
     transcriptomics: true,
+    proteomics: true,
   });
   const [selectedNode, setSelectedNode] = useState<FGNode | null>(null);
   const [hoveredEdge, setHoveredEdge] = useState<FGLink | null>(null);
+  const [selectedEdge, setSelectedEdge] = useState<FGLink | null>(null);
 
   // Initial load: DEFAULT_GENE (TP53) neighborhood.
   useEffect(() => {
-    loadGene(DEFAULT_GENE, 'all');
+    loadGene(DEFAULT_GENE);
   }, [loadGene]);
 
   const handleSelectGene = (symbol: string) => {
     setCurrentGene(symbol);
     setSelectedNode(null);
-    loadGene(symbol, activeTissue);
+    setSelectedEdge(null);
+    loadGene(symbol);
   };
 
-  const handleTissueChange = (tissue: string) => {
-    setActiveTissue(tissue);
-    loadGene(currentGene, tissue);
-  };
+  // Tissue is a render-time opacity channel (ADR-0006) — no refetch.
+  const handleTissueChange = (tissue: string) => setActiveTissue(tissue);
 
   const handleToggleLayer = (layer: LayerKey) => {
     setVisibleLayers((prev) => ({ ...prev, [layer]: !(prev[layer] ?? true) }));
   };
 
   const handleExpand = (node: FGNode) => {
-    if (node.node_type === 'gene' && node.hgnc_symbol) {
-      expandNode(node.hgnc_symbol, activeTissue);
-    }
+    // Both genes and TF proteins carry a symbol that resolves to a gene graph.
+    if (node.hgnc_symbol) expandNode(node.hgnc_symbol);
   };
 
   return (
@@ -55,9 +55,18 @@ export default function App() {
       <GraphViewer3D
         data={graphData}
         visibleLayers={visibleLayers}
-        onNodeClick={setSelectedNode}
-        onBackgroundClick={() => setSelectedNode(null)}
+        activeTissue={activeTissue}
+        selectedEdgeId={selectedEdge?.id ?? null}
+        onNodeClick={(n) => {
+          setSelectedNode(n);
+          setSelectedEdge(null);
+        }}
+        onBackgroundClick={() => {
+          setSelectedNode(null);
+          setSelectedEdge(null);
+        }}
         onEdgeHover={setHoveredEdge}
+        onEdgeClick={setSelectedEdge}
       />
 
       <header className="topbar">
@@ -80,8 +89,8 @@ export default function App() {
       </div>
 
       <div className="legend">
-        <span><i className="dot tf" /> TF</span>
         <span><i className="dot gene" /> Gene</span>
+        <span><i className="dot protein" /> TF protein</span>
         <span><i className="dot transcript" /> Transcript</span>
       </div>
 
@@ -91,7 +100,11 @@ export default function App() {
         onExpand={handleExpand}
       />
 
-      <EdgeDetailPanel link={hoveredEdge} />
+      {/* Pinned (clicked) edge takes precedence over the hovered one. */}
+      <EdgeDetailPanel
+        link={selectedEdge ?? hoveredEdge}
+        onClose={selectedEdge ? () => setSelectedEdge(null) : undefined}
+      />
 
       <QueryPanel tissue={activeTissue} />
     </div>

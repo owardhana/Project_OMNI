@@ -1,5 +1,6 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import ForceGraph3D from 'react-force-graph-3d';
+import { forceCollide } from 'd3-force-3d';
 import * as THREE from 'three';
 
 import {
@@ -14,34 +15,85 @@ import type { FGLink, FGNode, ForceGraphData } from '../types/graph';
 interface Props {
   data: ForceGraphData;
   visibleLayers: Record<string, boolean>;
+  activeTissue: string;
+  selectedEdgeId: string | null;
   onNodeClick: (node: FGNode) => void;
   onBackgroundClick: () => void;
   onEdgeHover: (link: FGLink | null) => void;
+  onEdgeClick: (link: FGLink | null) => void;
 }
 
-const PLANE_SIZE = 1100;
-// Side-profile camera: offset mostly along +X with a slight elevation, looking
-// at the origin. The layer-separation axis (world Z) then runs across the
-// screen so the two layers read as distinct stacked clouds, not top-down.
-const CAMERA = { x: 820, y: 150, z: 0 };
+const PLANE_SIZE = 1400;
+// Front camera, slightly elevated, looking at the origin: the vertical (Y) axis
+// carries the layer stack, so genomics reads at the bottom, proteomics at the
+// top. The orbit controls below soft-lock the polar angle so it never flips.
+const CAMERA = { x: 220, y: 260, z: 1050 };
+// Soft-lock: orbit freely in azimuth (spin the web), tilt between a slight
+// overhead and level, but never past the equator — so genomics can never appear
+// above proteomics.
+const MIN_POLAR = 0.6;
+const MAX_POLAR = Math.PI / 2;
+
+// Map the UI tissue toggle to a tissue_weights key (ADR-0006: opacity, not filter).
+const TISSUE_KEY: Record<string, string> = {
+  blood: 'whole_blood',
+  liver: 'liver',
+  brain: 'brain_prefrontal_cortex',
+};
 
 function resolveEndpoint(end: string | FGNode): FGNode | null {
   return typeof end === 'object' ? end : null;
 }
 
+function hexToRgba(hex: string, alpha: number): string {
+  const h = hex.replace('#', '');
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha.toFixed(3)})`;
+}
+
+// PRODUCES edges dim continuously by the active tissue's weight (never removed —
+// ADR-0006). All other edges keep a base opacity regardless of tissue.
+function linkAlpha(link: FGLink, activeTissue: string): number {
+  const base = 0.5;
+  if (activeTissue === 'all' || link.rel_type !== 'PRODUCES') return base;
+  const key = TISSUE_KEY[activeTissue];
+  const tw = link.tissue_weights?.[key];
+  if (tw == null) return 0.12; // no data -> faint, still visible
+  return Math.max(0.12, Math.min(1, tw));
+}
+
 export default function GraphViewer3D({
   data,
   visibleLayers,
+  activeTissue,
+  selectedEdgeId,
   onNodeClick,
   onBackgroundClick,
   onEdgeHover,
+  onEdgeClick,
 }: Props) {
-  // Loose ref: react-force-graph exposes scene()/camera()/d3Force() at runtime.
   const fgRef = useRef<any>(null);
   const planesRef = useRef<Record<string, THREE.Mesh>>({});
   const initRef = useRef(false);
 
-  // Add the two semi-transparent layer planes on mount; remove on unmount.
+  // Explicitly size the canvas to the viewport. The chrome is all
+  // position:absolute, so the ForceGraph3D container has no intrinsic height —
+  // without this the WebGL canvas collapses to 0x0 and nothing renders. The
+  // `|| default` guards a degenerate 0 (a graph must never render into 0x0).
+  const measure = () => ({
+    w: (typeof window !== 'undefined' && window.innerWidth) || 1280,
+    h: (typeof window !== 'undefined' && window.innerHeight) || 800,
+  });
+  const [dims, setDims] = useState(measure);
+  useEffect(() => {
+    const onResize = () => setDims(measure());
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  // Semi-transparent layer planes, one per omics layer.
   useEffect(() => {
     const scene = fgRef.current?.scene?.();
     if (!scene) return;
@@ -52,12 +104,13 @@ export default function GraphViewer3D({
       const material = new THREE.MeshBasicMaterial({
         color: layer.color,
         transparent: true,
-        opacity: 0.05,
+        opacity: 0.04,
         side: THREE.DoubleSide,
         depthWrite: false,
       });
       const mesh = new THREE.Mesh(geometry, material);
-      mesh.position.z = layer.z;
+      mesh.rotation.x = -Math.PI / 2; // lay flat: a horizontal floor per layer
+      mesh.position.y = layer.y;
       scene.add(mesh);
       planesRef.current[key] = mesh;
       added.push(mesh);
@@ -72,33 +125,47 @@ export default function GraphViewer3D({
     };
   }, []);
 
-  // Toggle plane visibility with their layer.
   useEffect(() => {
     Object.entries(planesRef.current).forEach(([key, mesh]) => {
       mesh.visible = visibleLayers[key] ?? true;
     });
   }, [visibleLayers]);
 
-  // Once the first graph arrives: loosen charge for a roomy X/Y spread within
-  // each layer (Z is pinned per-node via fz = layer target), then swing the
-  // camera to the side profile. Runs once so manual rotation is preserved after.
+  // react-force-graph caches accessor results; toggling a layer or changing the
+  // tissue won't re-run linkVisibility/linkColor/node accessors until a redraw.
+  // refresh() forces it — fixes both the layer-toggle "edges persist" bug (#4)
+  // and live tissue opacity (#3, ADR-0006).
+  useEffect(() => {
+    fgRef.current?.refresh?.();
+  }, [visibleLayers, activeTissue, selectedEdgeId]);
+
+  // Tune the force layout once data first arrives: stronger repulsion + collision
+  // + longer links spread the graph into a legible web rather than a clump (#5).
+  // NOTE: these are starting-point values — fine-tune in a real browser, since the
+  // force simulation (rAF-driven) can't run in the headless preview.
   useEffect(() => {
     const fg = fgRef.current;
     if (!fg || data.nodes.length === 0 || initRef.current) return;
     initRef.current = true;
 
-    const charge = fg.d3Force('charge');
-    if (charge?.strength) charge.strength(-55);
+    fg.d3Force('charge')?.strength(-200);
+    fg.d3Force('link')?.distance(70);
+    fg.d3Force('collision', forceCollide((n: FGNode) => nodeSize(n) + 8));
+    fg.d3Force('center')?.strength(0.05); // let the web breathe
     fg.d3ReheatSimulation?.();
 
-    const timer = setTimeout(() => {
-      fg.cameraPosition?.(CAMERA, { x: 0, y: 0, z: 0 }, 2200);
-    }, 1400);
-    return () => clearTimeout(timer);
+    // Soft-lock the orbit controls so the layer stack never flips vertically.
+    const controls = fg.controls?.();
+    if (controls) {
+      controls.minPolarAngle = MIN_POLAR;
+      controls.maxPolarAngle = MAX_POLAR;
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.12;
+    }
+    // Frame the stack immediately (warmupTicks already pre-spread the layout).
+    fg.cameraPosition?.(CAMERA, { x: 0, y: 0, z: 0 }, 0);
   }, [data]);
 
-  // Dev-only test hook: expose the force-graph instance + current data so an
-  // end-to-end script can map 3D nodes to screen coordinates. Harmless in prod.
   useEffect(() => {
     if (import.meta.env.DEV) {
       (window as unknown as Record<string, unknown>).__omniFG = fgRef.current;
@@ -110,16 +177,23 @@ export default function GraphViewer3D({
     <ForceGraph3D
       ref={fgRef}
       graphData={data}
-      backgroundColor="#070b16"
+      width={dims.w}
+      height={dims.h}
+      backgroundColor="#1a1a18"
       showNavInfo={false}
+      controlType="orbit"
+      warmupTicks={100}
+      cooldownTicks={200}
       nodeId="id"
       nodeResolution={16}
-      nodeOpacity={0.92}
+      nodeOpacity={0.95}
       nodeRelSize={4}
       nodeLabel={(n: FGNode) =>
         n.node_type === 'gene'
-          ? `${n.hgnc_symbol ?? n.ensembl_id}${n.is_tf ? ' · TF' : ' · Gene'}`
-          : `${n.hgnc_symbol ?? n.ensembl_tx_id} · Transcript`
+          ? `${n.hgnc_symbol ?? n.ensembl_id} · Gene`
+          : n.node_type === 'protein'
+            ? `${n.hgnc_symbol ?? n.uniprot_id} (protein)${n.subtype === 'transcription_factor' ? ' · TF' : ''}`
+            : `${n.hgnc_symbol ?? n.ensembl_tx_id} · Transcript`
       }
       nodeColor={(n: FGNode) => nodeColor(n)}
       nodeVal={(n: FGNode) => nodeSize(n)}
@@ -133,18 +207,21 @@ export default function GraphViewer3D({
           (visibleLayers[nodeLayer(t)] ?? true)
         );
       }}
-      linkColor={(l: FGLink) => edgeColor(l)}
-      linkOpacity={0.45}
-      linkWidth={0.6}
-      linkDirectionalArrowLength={2.5}
+      linkColor={(l: FGLink) => hexToRgba(edgeColor(l), linkAlpha(l, activeTissue))}
+      linkOpacity={1}
+      linkWidth={0.8}
+      linkDirectionalArrowLength={2.8}
       linkDirectionalArrowRelPos={1}
-      linkDirectionalParticles={2}
-      linkDirectionalParticleWidth={1.6}
-      linkDirectionalParticleSpeed={0.006}
-      linkDirectionalParticleColor={(l: FGLink) => edgeColor(l)}
+      linkCurvature={0.12}
+      // Moving flow particles only on the clicked (selected) edge.
+      linkDirectionalParticles={(l: FGLink) => (l.id === selectedEdgeId ? 4 : 0)}
+      linkDirectionalParticleWidth={2.2}
+      linkDirectionalParticleSpeed={0.01}
+      linkDirectionalParticleColor={(l: FGLink) => hexToRgba(edgeColor(l), 1)}
       onNodeClick={(n: FGNode) => onNodeClick(n)}
       onBackgroundClick={() => onBackgroundClick()}
       onLinkHover={(l: FGLink | null) => onEdgeHover(l)}
+      onLinkClick={(l: FGLink | null) => onEdgeClick(l)}
     />
   );
 }

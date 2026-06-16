@@ -23,7 +23,16 @@ export interface TranscriptNode {
   layer_z: number;
 }
 
-export type GraphNode = GeneNode | TranscriptNode;
+export interface ProteinNode {
+  id: string;
+  uniprot_id: string;
+  hgnc_symbol?: string | null;
+  subtype?: string | null; // 'transcription_factor' in MVP
+  node_type: 'protein';
+  layer_z: number;
+}
+
+export type GraphNode = GeneNode | TranscriptNode | ProteinNode;
 
 export interface GraphEdge {
   id: string;
@@ -71,8 +80,8 @@ export type FGNode = GraphNode & {
   x?: number;
   y?: number;
   z?: number;
-  zTarget?: number; // layer target (see useGraph)
-  fz?: number; // pinned z = zTarget; X/Y stay free
+  yTarget?: number; // layer target on the vertical axis (see useGraph)
+  fy?: number; // pinned y = yTarget; X/Z stay free
 };
 
 export type FGLink = GraphEdge & {
