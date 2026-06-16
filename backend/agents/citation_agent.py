@@ -49,8 +49,10 @@ class CitationAgent(BaseAgent):
         return params
 
     async def _fetch_uncited_edges(self, batch_size: int) -> list[dict]:
+        # REGULATES is now (:Protein)-[r]->(:Gene) (ADR-0004); the source protein's
+        # hgnc_symbol still drives the PubMed query, so search is unchanged.
         query = """
-        MATCH (s:Gene)-[r:REGULATES]->(t:Gene)
+        MATCH (s:Protein)-[r:REGULATES]->(t:Gene)
         WHERE (r.pmids IS NULL OR size(r.pmids) = 0)
           AND coalesce(r.citation_attempted, false) <> true
         RETURN elementId(r) AS eid, s.hgnc_symbol AS src, t.hgnc_symbol AS tgt

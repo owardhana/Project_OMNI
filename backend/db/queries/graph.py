@@ -30,11 +30,15 @@ async def search_genes(query: str, limit: int = 10) -> list[dict]:
     lucene = _build_lucene_query(query)
     if lucene is None:
         return []
+    # is_tf re-routed through the protein (ADR-0004): a gene "is a TF" iff it
+    # encodes one of our TF proteins, via its transcript or the ENCODES fallback.
     cypher = """
     CALL db.index.fulltext.queryNodes("gene_search", $q) YIELD node, score
     WHERE node:Gene
-    OPTIONAL MATCH (node)-[out:REGULATES]->(:Gene)
-    WITH node, score, count(out) > 0 AS is_tf
+    WITH node, score,
+         (EXISTS { (node)-[:ENCODES]->(:Protein) }
+          OR EXISTS { (node)-[:PRODUCES]->(:Transcript)-[:TRANSLATES_TO]->(:Protein) })
+          AS is_tf
     RETURN node.ensembl_id AS ensembl_id,
            node.hgnc_symbol AS hgnc_symbol,
            node.description AS description,

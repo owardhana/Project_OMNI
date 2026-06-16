@@ -13,7 +13,7 @@ async def _bio_node_count() -> int:
     async with get_session() as session:
         rec = await (
             await session.run(
-                "MATCH (n) WHERE n:Gene OR n:Transcript RETURN count(n) AS c"
+                "MATCH (n) WHERE n:Gene OR n:Transcript OR n:Protein RETURN count(n) AS c"
             )
         ).single()
     return rec["c"]
@@ -23,7 +23,9 @@ async def _edge_count() -> int:
     async with get_session() as session:
         rec = await (
             await session.run(
-                "MATCH ()-[r]->() WHERE r:REGULATES OR r:PRODUCES RETURN count(r) AS c"
+                "MATCH ()-[r]->() "
+                "WHERE r:REGULATES OR r:PRODUCES OR r:TRANSLATES_TO OR r:ENCODES "
+                "RETURN count(r) AS c"
             )
         ).single()
     return rec["c"]

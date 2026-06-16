@@ -18,16 +18,25 @@ async def get_gene(hgnc_symbol: str):
 
 
 @router.get("/gene/{hgnc_symbol}/graph", response_model=models.GraphResponse)
-async def get_gene_graph(hgnc_symbol: str, tissue: str = "all", hops: int = 1):
+async def get_gene_graph(
+    hgnc_symbol: str,
+    tissue: str = "all",
+    min_signal: float | None = None,
+    decay: float | None = None,
+    max_nodes: int | None = None,
+):
+    """Signal-decay subgraph around a gene (ADR-0005). All traversal params are
+    optional and fall back to configured defaults, so a paramless call works.
+    `tissue` is accepted for API compatibility but does not gate the graph
+    (ADR-0006) — the frontend uses tw_* for opacity."""
     record = await gene_queries.get_gene_by_symbol(hgnc_symbol)
     if not record:
         raise HTTPException(status_code=404, detail=f"Gene '{hgnc_symbol}' not found")
     ensembl_id = record["props"]["ensembl_id"]
     try:
-        if hops >= 2:
-            raw = await gene_queries.get_gene_subgraph(ensembl_id, tissue, max_hops=2)
-        else:
-            raw = await gene_queries.get_gene_neighborhood(ensembl_id, tissue, max_hops=1)
+        raw = await gene_queries.get_gene_neighborhood(
+            ensembl_id, tissue, decay=decay, min_signal=min_signal, max_nodes=max_nodes
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return models.graph_response_from_raw(raw, settings.tissues)

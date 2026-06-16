@@ -47,6 +47,14 @@ class Settings(BaseSettings):
     DEFAULT_GENE: str = "TP53"
     TISSUE_WEIGHT_THRESHOLD: float = 0.3
 
+    # Signal-decay traversal (ADR-0005). Defaults chosen so a paramless /graph
+    # call returns a bounded, legible subgraph.
+    TRAVERSAL_DECAY: float = 0.7  # global per-hop decay (d)
+    TRAVERSAL_MIN_SIGNAL: float = 0.05  # signal floor (epsilon)
+    TRAVERSAL_MAX_NODES: int = 150  # hard cap (guardrail)
+    PRODUCES_CONDUCTANCE: float = 0.9  # structural; tissue is NOT in conductance (ADR-0006)
+    STRUCTURAL_CONDUCTANCE: float = 1.0  # TRANSLATES_TO / ENCODES
+
     @property
     def tissues(self) -> list[str]:
         """Tissue keys, e.g. ['whole_blood', 'liver', 'brain_prefrontal_cortex']."""

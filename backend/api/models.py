@@ -10,9 +10,12 @@ from typing import Annotated, Literal, Optional, Union
 
 from pydantic import BaseModel, Field
 
-# Z position per omics layer (graphite model): genomics=0, transcriptomics=300.
+# Z position per omics layer (graphite model): genomics=0, transcriptomics=300,
+# proteomics=600 (TF slice — ADR-0004). Frontend uses its own layer coords; this
+# is metadata.
 GENE_LAYER_Z = 0
 TRANSCRIPT_LAYER_Z = 300
+PROTEIN_LAYER_Z = 600
 
 
 class GeneNode(BaseModel):
@@ -38,7 +41,20 @@ class TranscriptNode(BaseModel):
     layer_z: int = TRANSCRIPT_LAYER_Z
 
 
-GraphNode = Annotated[Union[GeneNode, TranscriptNode], Field(discriminator="node_type")]
+class ProteinNode(BaseModel):
+    id: str  # graph node id == uniprot_id
+    uniprot_id: str
+    hgnc_symbol: Optional[str] = None
+    # subtype distinguishes kinds of protein (only transcription_factor in MVP);
+    # node_type is the entity-kind discriminator (gene | transcript | protein).
+    subtype: Optional[str] = None
+    node_type: Literal["protein"] = "protein"
+    layer_z: int = PROTEIN_LAYER_Z
+
+
+GraphNode = Annotated[
+    Union[GeneNode, TranscriptNode, ProteinNode], Field(discriminator="node_type")
+]
 
 
 class GraphEdge(BaseModel):
@@ -146,6 +162,15 @@ def transcript_node_from_props(props: dict) -> TranscriptNode:
     )
 
 
+def protein_node_from_props(props: dict) -> ProteinNode:
+    return ProteinNode(
+        id=props["uniprot_id"],
+        uniprot_id=props["uniprot_id"],
+        hgnc_symbol=props.get("hgnc_symbol"),
+        subtype=props.get("subtype"),
+    )
+
+
 def edge_from_raw(raw_edge: dict, tissues: list[str]) -> GraphEdge:
     props = raw_edge["props"]
     rel_type = raw_edge["rel_type"]
@@ -171,7 +196,9 @@ def graph_response_from_raw(raw: dict, tissues: list[str]) -> GraphResponse:
     nodes: list[GraphNode] = []
     for node in raw["nodes"]:
         if node["kind"] == "gene":
-            nodes.append(gene_node_from_props(node["props"], node["is_tf"]))
+            nodes.append(gene_node_from_props(node["props"], node.get("is_tf", False)))
+        elif node["kind"] == "protein":
+            nodes.append(protein_node_from_props(node["props"]))
         else:
             nodes.append(transcript_node_from_props(node["props"]))
     edges = [edge_from_raw(e, tissues) for e in raw["edges"]]
