@@ -17,7 +17,7 @@ export default function LayerToggle({ visibleLayers, onToggle }: Props) {
           />
           <span
             className="layer-swatch"
-            style={{ backgroundColor: LAYERS[key].color }}
+            style={{ backgroundColor: LAYERS[key].accent }}
           />
           {LAYERS[key].label}
         </label>

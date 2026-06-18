@@ -9,9 +9,8 @@ each term **is**, not how it is implemented.
 ### Entities
 
 **Entity kind**:
-The omics class of a node — one of `gene`, `transcript`, or `protein`. The single
-source of truth for what a node *is*. Replaces the older derived `is_tf` flag,
-which now demotes to a protein subtype.
+The omics class of a node — one of `gene`, `transcript`, `protein`, `variant`, or
+`disease`. The single source of truth for what a node *is*.
 
 **Gene**:
 A genomic locus that can be transcribed. Lives in the **genomics layer**. Machine
@@ -27,96 +26,142 @@ _Avoid_: mRNA (excludes non-coding), isoform (use for the biological concept, no
 **Protein**:
 A polypeptide translated from a transcript. Lives in the **proteomics layer**.
 Machine ID = UniProt accession (e.g. `P04637`). Display name = symbol + kind tag
-(e.g. `TP53 (protein)`).
+(e.g. `TP53 (protein)`). Phase 2: full proteome (~20k proteins), not just the TF
+slice.
 
 **Transcription factor (TF)**:
 A **protein subtype** — a protein that regulates the expression of genes. NOT its
-own node kind; a TF is a `protein` whose subtype is transcription-factor. It is
+own node kind; a TF is a `protein` whose subtype is `transcription_factor`. It is
 the source of `REGULATES` edges.
 _Avoid_: regulator (too broad), "TF node" / "TF layer" (there is no separate TF
 node kind or layer — TFs live in the proteomics layer).
 
 **Protein subtype**:
-A finer classification of a protein (e.g. transcription-factor, enzyme,
-structural). Distinguished visually by **color**, not by layer. Only the
-transcription-factor subtype exists today; the field is open for growth.
+A finer classification of a protein. Distinguished visually by **color**, not by
+layer. Subtypes: `transcription_factor` (regulatory DNA binding), `kinase`
+(phosphorylation), `enzyme` (catalysis), `structural` (scaffolding). Annotated
+from UniProt. Only `transcription_factor` existed in the MVP; full subtype
+annotation is a phase-2 addition.
+
+**Variant**:
+A genomic variant (SNP or indel) at sub-gene resolution. Lives in the **genomics
+layer** as a distinct node kind (different shape/color from Gene). Machine ID =
+rsid (e.g. `rs7903146`); fallback = `chr:pos:ref:alt` (GRCh38) for variants
+without rsids — same primary + fallback pattern as `TRANSLATES_TO`/`ENCODES`.
+Source: GWAS Catalog (disease associations, p < 5×10⁻⁸) and ClinVar (clinical
+significance).
+_Avoid_: mutation (implies pathogenicity), polymorphism (too narrow).
+
+**Disease**:
+A human disease or phenotypic trait. Lives in the **phenotype layer**. Machine ID
+= EFO ontology ID (e.g. `EFO_0001360`). A first-class traversable node — not an
+edge attribute. A Disease node is a valid traversal seed alongside Gene.
+Source: GWAS Catalog, EFO ontology.
+_Avoid_: "disease attribute", "trait string" — Disease is always a node.
+
+**Embedding**:
+A 1536-dimensional float array stored as a property on Gene, Protein, and Disease
+nodes, encoding their `summary_text` for semantic search. Populated by the
+embedding agent using `text-embedding-3-small` via OpenRouter. Not stored on
+Transcript or Variant nodes (no meaningful free text). Queried via Neo4j native
+vector index (`db.index.vector`), composable with graph traversal in Cypher.
+_Avoid_: "vector" as a synonym in domain language — use embedding.
 
 ### Layers
 
 **Layer** (omics layer):
-A horizontal plane in the stacked model, one per omics level. Bottom to top:
-**genomics → transcriptomics → proteomics** (metabolomics is future). A node
-belongs to exactly one layer, fixed by its **entity kind**.
+A horizontal plane in the stacked model. Bottom to top:
+**genomics → transcriptomics → proteomics → phenotype**.
+A node belongs to exactly one layer, fixed by its **entity kind**.
 
-**Genomics layer**: holds **gene** nodes.
+**Genomics layer**: holds **gene** and **variant** nodes.
 **Transcriptomics layer**: holds **transcript** nodes.
-**Proteomics layer**: holds **protein** nodes (TFs included).
+**Proteomics layer**: holds **protein** nodes (all subtypes, including TFs).
+**Phenotype layer**: holds **disease** nodes. The 4th layer, above proteomics.
+_(Metabolomics layer is future — layer 5.)_
 
 ### Relationships
 
 **Regulates**:
 A **protein** (transcription-factor subtype) acting on a **gene** to activate or
 repress its expression. Directed, runs *downward* proteomics → genomics. The
-biology of TF→DNA binding.
+biology of TF→DNA binding. Source: DoRothEA (confidence tiers A–B).
 _Avoid_: "gene regulates gene" — the regulator is the TF protein, not its gene.
 
 **Produces**:
 A **gene** giving rise to a **transcript**. Directed, genomics → transcriptomics.
-Carries tissue context.
+Carries tissue context as flat `tw_<tissue>` float properties (ADR-0001).
 
 **Translates to**:
 A **transcript** giving rise to a **protein**. Directed, transcriptomics →
-proteomics. The biologically exact, stepwise link up the stack — preferred
-whenever the protein's canonical transcript is in the graph.
+proteomics. Primary link — preferred when the canonical transcript is in the graph.
 
 **Encodes**:
-A **gene** giving rise to a **protein**, directed genomics → proteomics. The
-**fallback** link used only when the protein's transcript is absent, so a protein
-is never left disconnected from its molecule. Together, `TRANSLATES_TO` (primary)
-and `ENCODES` (fallback) are what make `TP53 (protein)` recognizably the same
-molecule as gene `TP53`.
+A **gene** giving rise to a **protein**, directed genomics → proteomics. Fallback
+link used only when the protein's canonical transcript is absent.
+
+**Interacts with**:
+A physical protein-protein interaction between two **protein** nodes. Intra-layer,
+within proteomics. Source: STRING v12, filtered at `combined_score > 0.9` (~50k
+edges). Conductance in signal-decay traversal = STRING `combined_score`. Expansion
+per traversal frontier step is capped at top-k by `combined_score` (default k=10)
+to prevent hub-protein explosion.
+_Avoid_: "PPI" as a relationship label — the label is `INTERACTS_WITH`.
+
+**In gene**:
+Structural mapping of a **variant** to its host **gene** locus. Directed, variant
+→ gene. Consequence type (e.g. `missense_variant`) from GWAS Catalog / Ensembl VEP.
+
+**Associated with**:
+A **variant** linked to a **disease** via a GWAS association or ClinVar clinical
+classification. Directed, variant → disease. Carries `p_value`, `beta`,
+`odds_ratio`, `source_db`. Conductance in signal-decay traversal =
+`-log10(p_value)` normalised 0–1 against genome-wide significance floor (p=5×10⁻⁸).
+
+**Implicated in**:
+A rolled-up **gene**-to-**disease** association (aggregated from GWAS Catalog
+variant-level hits). Directed, gene → disease. A convenience edge for direct
+gene-disease queries without traversing through individual variants.
 
 ### Identity & disambiguation
 
 The same molecule appears once per layer (gene `TP53`, transcript `TP53-201`,
-protein `TP53 (protein)`), all derived from each other. They are kept distinct by:
+protein `TP53 (protein)`), all derived from each other. Kept distinct by:
 
 1. **Machine ID** — layer-specific and collision-free: ENSG (gene), ENST
-   (transcript), UniProt (protein). A node's identity never clashes across layers.
-2. **Display name** — symbol plus a kind cue, shown on *every* surface (3D label,
-   search, query answers, edge panels): `TP53` / `TP53-201` / `TP53 (protein)`.
-3. **Visual channels** in 3D — **layer** (position) + **color** (subtype) +
-   **shape** (per layer). Redundant on purpose.
-
-The vertical `ENCODES` (and future translation) edges show that the separate
-nodes are the same underlying molecule.
+   (transcript), UniProt (protein), rsid (variant), EFO ID (disease).
+2. **Display name** — symbol plus a kind cue, shown on every surface.
+3. **Visual channels** in 3D — **layer** (Z position) + **color** (subtype) +
+   **shape** (per node kind). Redundant on purpose.
 
 ## Flagged ambiguities
 
 - **"TP53"** alone is ambiguous — it names a gene, its transcripts, and its
-  protein. Always qualify by **entity kind** (display name carries the cue).
+  protein. Always qualify by **entity kind**.
 - **"TF"** is not a node kind and not a layer. It is a **protein subtype** living
-  in the proteomics layer. The old `is_tf` derived flag is superseded by
-  `entity_kind = protein` + subtype = transcription-factor.
-- **"Regulation"** is protein→gene, never gene→gene. The earlier model collapsed
-  the TF protein into its gene; that conflation is retired.
+  in the proteomics layer.
+- **"Regulation"** is protein→gene, never gene→gene.
+- **"Disease"** is always a first-class node with an EFO ontology ID, never an
+  edge attribute or a free-text string on a relationship.
+- **"Variant"** lives in the genomics layer alongside genes — it is a distinct
+  node kind, not a property on a Gene node.
 - **Traversal terms** ("signal", "conductance", "decay", "signal floor") are
-  *algorithm* vocabulary, not domain language — see
-  [ADR-0005](docs/adr/0005-signal-decay-traversal.md). They are deliberately kept
-  out of this glossary.
+  *algorithm* vocabulary — see [ADR-0005](docs/adr/0005-signal-decay-traversal.md).
+  Deliberately kept out of this glossary.
 
 ## Example dialogue
 
+> **Dev:** When I query "Type 2 Diabetes", what do I get?
+> **Bio:** You seed the traversal from a **Disease** node (`EFO_0001360`) in the
+> phenotype layer. Signal decays inward: Disease → Variant (via `ASSOCIATED_WITH`)
+> → Gene (via `IN_GENE`) → Protein, Transcripts, and STRING interactors. Stronger
+> GWAS hits (lower p-value) carry more signal and reach further.
+> **Dev:** Why is Disease a node and not just an edge attribute?
+> **Bio:** Because you need to traverse *through* diseases — "find all genes
+> associated with metabolic diseases" traverses from a Disease category to its
+> children to their variants to their genes. An edge attribute can't be traversed.
 > **Dev:** When I query TP53, why do I see it twice?
 > **Bio:** Because you're seeing two entities. The **gene** TP53 in the genomics
 > layer — that's the locus other TFs regulate. And the **protein** `TP53 (protein)`
 > in the proteomics layer — that's the transcription factor regulating *other*
 > genes. The vertical **ENCODES** edge between them says "same molecule."
-> **Dev:** So the `REGULATES` edges always start from the protein?
-> **Bio:** Right. A TF is a protein subtype. It regulates genes by binding DNA, so
-> `REGULATES` runs down from proteomics to genomics. A gene never regulates
-> another gene directly — that was shorthand we've now made explicit.
-> **Dev:** And `TP53-201`?
-> **Bio:** That's a transcript — one RNA isoform of the TP53 gene, in the middle
-> layer. Gene **produces** transcript, transcript **translates to** protein
-> (or gene **encodes** protein, if the transcript isn't loaded).

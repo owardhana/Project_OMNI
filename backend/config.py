@@ -38,6 +38,8 @@ class Settings(BaseSettings):
     TEXT2CYPHER_MODEL: str = "anthropic/claude-sonnet-4.6"
     SYNTHESIS_MODEL: str = "anthropic/claude-sonnet-4.6"
     CITATION_CHECK_MODEL: str = "anthropic/claude-haiku-4.5"
+    # Phase 2: embedding model for semantic search (ADR-0008). 1536-dim.
+    EMBEDDING_MODEL: str = "openai/text-embedding-3-small"
 
     # App config
     TISSUES: str = "whole_blood,liver,brain_prefrontal_cortex"
@@ -54,6 +56,14 @@ class Settings(BaseSettings):
     TRAVERSAL_MAX_NODES: int = 150  # hard cap (guardrail)
     PRODUCES_CONDUCTANCE: float = 0.9  # structural; tissue is NOT in conductance (ADR-0006)
     STRUCTURAL_CONDUCTANCE: float = 1.0  # TRANSLATES_TO / ENCODES
+
+    # Phase 2 tunable scaling parameters (see 06_data_vision.md). All env-driven —
+    # never hardcode thresholds in ETL or traversal code.
+    STRING_MIN_CONFIDENCE: float = 0.9  # STRING PPI combined_score threshold (~50k edges)
+    STRING_MAX_EXPAND_PER_NODE: int = 10  # max INTERACTS_WITH neighbours per frontier step
+    GWAS_MIN_SIGNIFICANCE: float = 5e-8  # GWAS p-value cutoff (genome-wide significance)
+    EMBEDDING_AGENT_BATCH_SIZE: int = 50  # nodes per embedding agent run
+    EMBEDDING_AGENT_CRON_HOUR: int = 1  # 1am UTC (after citation agent at midnight)
 
     @property
     def tissues(self) -> list[str]:

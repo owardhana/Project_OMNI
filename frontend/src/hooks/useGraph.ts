@@ -1,7 +1,7 @@
 import { useCallback, useState } from 'react';
 
 import { api } from '../api/client';
-import { GENE_Y, PROTEIN_Y, TRANSCRIPT_Y, Y_JITTER } from '../styles/layers';
+import { DISEASE_Y, GENE_Y, PROTEIN_Y, TRANSCRIPT_Y, Y_JITTER } from '../styles/layers';
 import type { FGNode, ForceGraphData, GraphResponse } from '../types/graph';
 
 // Deterministic per-node jitter in [-Y_JITTER, +Y_JITTER] from the node id, so a
@@ -16,7 +16,8 @@ function yTargetFor(node: FGNode): number {
   const jitter = jitterFor(node.id);
   if (node.node_type === 'transcript') return TRANSCRIPT_Y + jitter;
   if (node.node_type === 'protein') return PROTEIN_Y + jitter;
-  return GENE_Y + jitter;
+  if (node.node_type === 'disease') return DISEASE_Y + jitter;
+  return GENE_Y + jitter; // gene + variant both live in the genomics plane
 }
 
 // Convert a backend GraphResponse into react-force-graph data. Each node is
@@ -62,6 +63,19 @@ export function useGraph() {
     }
   }, []);
 
+  const loadDisease = useCallback(async (ontologyId: string) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const resp = await api.getDiseaseGraph(ontologyId);
+      setGraphData(toForceGraph(resp));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   const expandNode = useCallback(async (symbol: string) => {
     try {
       const resp = await api.getGeneGraph(symbol);
@@ -71,5 +85,23 @@ export function useGraph() {
     }
   }, []);
 
-  return { graphData, loading, error, loadGene, expandNode };
+  // Additive merge of an externally-built subgraph (Phase 14 multi-load / path).
+  const mergeInto = useCallback((resp: GraphResponse) => {
+    setGraphData((prev) => mergeGraph(prev, toForceGraph(resp)));
+  }, []);
+
+  const clearGraph = useCallback(() => {
+    setGraphData({ nodes: [], links: [] });
+  }, []);
+
+  return {
+    graphData,
+    loading,
+    error,
+    loadGene,
+    loadDisease,
+    expandNode,
+    mergeInto,
+    clearGraph,
+  };
 }

@@ -11,11 +11,13 @@ from typing import Annotated, Literal, Optional, Union
 from pydantic import BaseModel, Field
 
 # Z position per omics layer (graphite model): genomics=0, transcriptomics=300,
-# proteomics=600 (TF slice — ADR-0004). Frontend uses its own layer coords; this
-# is metadata.
+# proteomics=600 (ADR-0004), phenotype=900 (ADR-0007 — the 4th layer). Variants
+# sit in the genomics layer alongside genes. Frontend uses its own layer coords;
+# this is metadata.
 GENE_LAYER_Z = 0
 TRANSCRIPT_LAYER_Z = 300
 PROTEIN_LAYER_Z = 600
+DISEASE_LAYER_Z = 900
 
 
 class GeneNode(BaseModel):
@@ -27,6 +29,8 @@ class GeneNode(BaseModel):
     chromosome: Optional[str] = None
     biotype: Optional[str] = None
     is_tf: bool = False
+    pli_score: Optional[float] = None
+    cancer_gene: Optional[bool] = None
     node_type: Literal["gene"] = "gene"
     layer_z: int = GENE_LAYER_Z
 
@@ -48,12 +52,40 @@ class ProteinNode(BaseModel):
     # subtype distinguishes kinds of protein (only transcription_factor in MVP);
     # node_type is the entity-kind discriminator (gene | transcript | protein).
     subtype: Optional[str] = None
+    summary_text: Optional[str] = None
+    go_terms: list[str] = Field(default_factory=list)
+    subcellular_loc: Optional[str] = None
+    molecular_weight: Optional[float] = None
     node_type: Literal["protein"] = "protein"
     layer_z: int = PROTEIN_LAYER_Z
 
 
+class VariantNode(BaseModel):
+    id: str  # rsid or chr:pos:ref:alt
+    rsid: Optional[str] = None
+    chromosome: Optional[str] = None
+    position_grch38: Optional[int] = None
+    consequence_type: Optional[str] = None
+    cadd_score: Optional[float] = None
+    gnomad_af: Optional[float] = None
+    clinical_significance: Optional[str] = None
+    node_type: Literal["variant"] = "variant"
+    layer_z: int = GENE_LAYER_Z  # variant sits in the genomics layer
+
+
+class DiseaseNode(BaseModel):
+    id: str  # ontology_id (EFO / MONDO / Orphanet / ...)
+    ontology_id: str
+    name: Optional[str] = None
+    category: Optional[str] = None
+    description: Optional[str] = None
+    node_type: Literal["disease"] = "disease"
+    layer_z: int = DISEASE_LAYER_Z  # phenotype layer (above proteomics)
+
+
 GraphNode = Annotated[
-    Union[GeneNode, TranscriptNode, ProteinNode], Field(discriminator="node_type")
+    Union[GeneNode, TranscriptNode, ProteinNode, VariantNode, DiseaseNode],
+    Field(discriminator="node_type"),
 ]
 
 
@@ -61,27 +93,59 @@ class GraphEdge(BaseModel):
     id: str
     source: str
     target: str
-    rel_type: str  # "REGULATES" | "PRODUCES"
+    rel_type: str  # REGULATES | PRODUCES | TRANSLATES_TO | ENCODES |
+    #                INTERACTS_WITH | ASSOCIATED_WITH | IN_GENE | IMPLICATED_IN
     mode: Optional[str] = None
     confidence: Optional[float] = None
     confidence_tier: Optional[str] = None
     tissue_weights: Optional[dict[str, float]] = None
+    # Phase 2 edge attributes (only set on the relevant relationship types).
+    combined_score: Optional[float] = None  # INTERACTS_WITH (STRING)
+    experimental_score: Optional[float] = None
+    coexpression_score: Optional[float] = None
+    p_value: Optional[float] = None  # ASSOCIATED_WITH (GWAS)
+    consequence_type: Optional[str] = None  # IN_GENE
     source_db: Optional[str] = None
     pmids: list[str] = Field(default_factory=list)
     citation_attempted: bool = False
 
 
+class GraphWarning(BaseModel):
+    type: str  # e.g. "disconnected"
+    component_count: Optional[int] = None
+    message: str
+
+
 class GraphResponse(BaseModel):
     nodes: list[GraphNode]
     edges: list[GraphEdge]
+    warnings: list[GraphWarning] = Field(default_factory=list)
+    metadata: dict = Field(default_factory=dict)
+
+
+class MultiGraphRequest(BaseModel):
+    seed_ids: list[str]
+    seed_types: list[str]  # parallel to seed_ids: gene|protein|variant|disease
+
+
+class PathResponse(BaseModel):
+    path_found: bool
+    hop_count: Optional[int] = None
+    path_quality: Literal["direct", "moderate", "weak", "no_path"]
+    nodes: list[GraphNode] = Field(default_factory=list)
+    edges: list[GraphEdge] = Field(default_factory=list)
+    warning: Optional[str] = None
 
 
 class SearchResult(BaseModel):
-    ensembl_id: str
+    id: str  # ensembl_id | ensembl_tx_id | uniprot_id | ontology_id
+    node_type: str  # gene | transcript | protein | disease
     hgnc_symbol: Optional[str] = None
+    name: Optional[str] = None  # disease display name
     description: Optional[str] = None
     is_tf: bool = False
     score: float = 0.0
+    ensembl_id: Optional[str] = None  # populated for gene results (back-compat)
 
 
 class QueryRequest(BaseModel):
@@ -106,6 +170,11 @@ class EdgeDetail(BaseModel):
     confidence: Optional[float] = None
     confidence_tier: Optional[str] = None
     tissue_weights: Optional[dict[str, float]] = None
+    combined_score: Optional[float] = None
+    experimental_score: Optional[float] = None
+    coexpression_score: Optional[float] = None
+    p_value: Optional[float] = None
+    consequence_type: Optional[str] = None
     source_db: Optional[str] = None
     pmids: list[str] = Field(default_factory=list)
     citation_attempted: bool = False
@@ -149,6 +218,8 @@ def gene_node_from_props(props: dict, is_tf: bool) -> GeneNode:
         chromosome=props.get("chromosome"),
         biotype=props.get("biotype"),
         is_tf=is_tf,
+        pli_score=props.get("pli_score"),
+        cancer_gene=props.get("cancer_gene"),
     )
 
 
@@ -168,6 +239,34 @@ def protein_node_from_props(props: dict) -> ProteinNode:
         uniprot_id=props["uniprot_id"],
         hgnc_symbol=props.get("hgnc_symbol"),
         subtype=props.get("subtype"),
+        summary_text=props.get("summary_text"),
+        go_terms=list(props.get("go_terms") or []),
+        subcellular_loc=props.get("subcellular_loc"),
+        molecular_weight=props.get("molecular_weight"),
+    )
+
+
+def variant_node_from_props(props: dict) -> VariantNode:
+    rsid = props.get("rsid")
+    return VariantNode(
+        id=rsid if rsid is not None else props.get("id", ""),
+        rsid=rsid,
+        chromosome=props.get("chromosome"),
+        position_grch38=props.get("position_grch38"),
+        consequence_type=props.get("consequence_type"),
+        cadd_score=props.get("cadd_score"),
+        gnomad_af=props.get("gnomad_af"),
+        clinical_significance=props.get("clinical_significance"),
+    )
+
+
+def disease_node_from_props(props: dict) -> DiseaseNode:
+    return DiseaseNode(
+        id=props["ontology_id"],
+        ontology_id=props["ontology_id"],
+        name=props.get("name"),
+        category=props.get("category"),
+        description=props.get("description"),
     )
 
 
@@ -186,21 +285,34 @@ def edge_from_raw(raw_edge: dict, tissues: list[str]) -> GraphEdge:
         confidence=props.get("confidence"),
         confidence_tier=props.get("confidence_tier"),
         tissue_weights=tissue_weights,
+        combined_score=props.get("combined_score"),
+        experimental_score=props.get("experimental_score"),
+        coexpression_score=props.get("coexpression_score"),
+        p_value=props.get("p_value"),
+        consequence_type=props.get("consequence_type"),
         source_db=props.get("source_db"),
         pmids=_coerce_pmids(props.get("pmids")),
         citation_attempted=bool(props.get("citation_attempted", False)),
     )
 
 
+_NODE_BUILDERS = {
+    "protein": protein_node_from_props,
+    "variant": variant_node_from_props,
+    "disease": disease_node_from_props,
+    "transcript": transcript_node_from_props,
+}
+
+
 def graph_response_from_raw(raw: dict, tissues: list[str]) -> GraphResponse:
     nodes: list[GraphNode] = []
     for node in raw["nodes"]:
-        if node["kind"] == "gene":
+        kind = node["kind"]
+        if kind == "gene":
             nodes.append(gene_node_from_props(node["props"], node.get("is_tf", False)))
-        elif node["kind"] == "protein":
-            nodes.append(protein_node_from_props(node["props"]))
         else:
-            nodes.append(transcript_node_from_props(node["props"]))
+            builder = _NODE_BUILDERS.get(kind, transcript_node_from_props)
+            nodes.append(builder(node["props"]))
     edges = [edge_from_raw(e, tissues) for e in raw["edges"]]
     return GraphResponse(nodes=nodes, edges=edges)
 
@@ -219,6 +331,11 @@ def edge_detail_from_raw(raw_edge: dict, tissues: list[str]) -> EdgeDetail:
         confidence=props.get("confidence"),
         confidence_tier=props.get("confidence_tier"),
         tissue_weights=tissue_weights,
+        combined_score=props.get("combined_score"),
+        experimental_score=props.get("experimental_score"),
+        coexpression_score=props.get("coexpression_score"),
+        p_value=props.get("p_value"),
+        consequence_type=props.get("consequence_type"),
         source_db=props.get("source_db"),
         pmids=_coerce_pmids(props.get("pmids")),
         citation_attempted=bool(props.get("citation_attempted", False)),

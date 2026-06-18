@@ -15,7 +15,7 @@ from backend.api.models import QueryResponse
 from backend.db.neo4j_client import get_session
 from backend.llm.client import SYNTHESIS_MODEL, TEXT2CYPHER_MODEL, complete
 from backend.llm.prompts.synthesis import SYNTHESIS_SYSTEM_PROMPT
-from backend.llm.prompts.text2cypher import TEXT2CYPHER_SYSTEM_PROMPT
+from backend.llm.prompts.text2cypher import build_text2cypher_prompt
 from backend.llm.validators import validate_cypher
 
 logger = logging.getLogger(__name__)
@@ -69,7 +69,7 @@ class QueryAgent(BaseAgent):
         self, question: str, tissue: str = "all", max_hops: int = 2
     ) -> QueryResponse:
         messages = [
-            {"role": "system", "content": TEXT2CYPHER_SYSTEM_PROMPT},
+            {"role": "system", "content": await build_text2cypher_prompt()},
             {"role": "user", "content": self._user_prompt(question, tissue, max_hops)},
         ]
 

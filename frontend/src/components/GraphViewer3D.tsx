@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import ForceGraph3D from 'react-force-graph-3d';
 import { forceCollide } from 'd3-force-3d';
 import * as THREE from 'three';
+import { FlyControls } from 'three/examples/jsm/controls/FlyControls.js';
 
 import {
   LAYERS,
@@ -77,6 +78,10 @@ export default function GraphViewer3D({
   const fgRef = useRef<any>(null);
   const planesRef = useRef<Record<string, THREE.Mesh>>({});
   const initRef = useRef(false);
+  const [cameraMode, setCameraMode] = useState<'orbit' | 'fly'>('orbit');
+  const flyRef = useRef<FlyControls | null>(null);
+  const flyRafRef = useRef<number | null>(null);
+  const flyClockRef = useRef<THREE.Clock | null>(null); // lazy: don't alloc per render
 
   // Explicitly size the canvas to the viewport. The chrome is all
   // position:absolute, so the ForceGraph3D container has no intrinsic height —
@@ -92,6 +97,61 @@ export default function GraphViewer3D({
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, []);
+
+  // Press 'f'/'F' to toggle Orbit <-> Fly; Esc returns to Orbit. Ignore when
+  // typing into an input so the search/query boxes still work.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      // Toggle on 'c' (camera) — NOT 'f': FlyControls binds F to "move down", so
+      // a shared key would exit fly-mode every time you tried to descend.
+      if (e.key === 'c' || e.key === 'C') {
+        setCameraMode((m) => (m === 'orbit' ? 'fly' : 'orbit'));
+      } else if (e.key === 'Escape') {
+        setCameraMode('orbit');
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, []);
+
+  // Fly mode: disable OrbitControls and drive a FlyControls update loop. WASD =
+  // move, R/F = up/down, mouse drag = look (dragToLook). Esc/C return to orbit.
+  useEffect(() => {
+    const fg = fgRef.current;
+    const camera = fg?.camera?.();
+    const renderer = fg?.renderer?.();
+    const orbit = fg?.controls?.();
+    if (!camera || !renderer) return;
+
+    if (cameraMode === 'fly') {
+      if (orbit) orbit.enabled = false;
+      const fly = new FlyControls(camera, renderer.domElement);
+      fly.movementSpeed = 80;
+      // rollSpeed also scales drag-look sensitivity; 0.005 made dragging feel
+      // dead. ~0.6 gives a responsive free-look without spinning.
+      fly.rollSpeed = 0.6;
+      fly.dragToLook = true;
+      flyRef.current = fly;
+      if (!flyClockRef.current) flyClockRef.current = new THREE.Clock();
+      flyClockRef.current.start();
+      const tick = () => {
+        flyRef.current?.update(flyClockRef.current!.getDelta());
+        flyRafRef.current = requestAnimationFrame(tick);
+      };
+      flyRafRef.current = requestAnimationFrame(tick);
+    } else if (orbit) {
+      orbit.enabled = true;
+    }
+
+    return () => {
+      if (flyRafRef.current != null) cancelAnimationFrame(flyRafRef.current);
+      flyRafRef.current = null;
+      flyRef.current?.dispose?.();
+      flyRef.current = null;
+    };
+  }, [cameraMode]);
 
   // Semi-transparent layer planes, one per omics layer.
   useEffect(() => {
@@ -174,12 +234,13 @@ export default function GraphViewer3D({
   }, [data]);
 
   return (
+    <>
     <ForceGraph3D
       ref={fgRef}
       graphData={data}
       width={dims.w}
       height={dims.h}
-      backgroundColor="#1a1a18"
+      backgroundColor="#050508"
       showNavInfo={false}
       controlType="orbit"
       warmupTicks={100}
@@ -188,13 +249,16 @@ export default function GraphViewer3D({
       nodeResolution={16}
       nodeOpacity={0.95}
       nodeRelSize={4}
-      nodeLabel={(n: FGNode) =>
-        n.node_type === 'gene'
-          ? `${n.hgnc_symbol ?? n.ensembl_id} · Gene`
-          : n.node_type === 'protein'
-            ? `${n.hgnc_symbol ?? n.uniprot_id} (protein)${n.subtype === 'transcription_factor' ? ' · TF' : ''}`
-            : `${n.hgnc_symbol ?? n.ensembl_tx_id} · Transcript`
-      }
+      nodeLabel={(n: FGNode) => {
+        if (n.node_type === 'gene') return `${n.hgnc_symbol ?? n.ensembl_id} · Gene`;
+        if (n.node_type === 'protein')
+          return `${n.hgnc_symbol ?? n.uniprot_id} (protein)${n.subtype === 'transcription_factor' ? ' · TF' : ''}`;
+        if (n.node_type === 'transcript')
+          return `${n.hgnc_symbol ?? n.ensembl_tx_id} · Transcript`;
+        if (n.node_type === 'variant')
+          return `${n.rsid ?? n.id} · Variant${n.clinical_significance ? ' · ' + n.clinical_significance : ''}`;
+        return `${n.name ?? n.ontology_id} · Disease`;
+      }}
       nodeColor={(n: FGNode) => nodeColor(n)}
       nodeVal={(n: FGNode) => nodeSize(n)}
       nodeVisibility={(n: FGNode) => visibleLayers[nodeLayer(n)] ?? true}
@@ -209,7 +273,8 @@ export default function GraphViewer3D({
       }}
       linkColor={(l: FGLink) => hexToRgba(edgeColor(l), linkAlpha(l, activeTissue))}
       linkOpacity={1}
-      linkWidth={0.8}
+      // INTERACTS_WITH (intra-layer PPI) renders thinner than inter-layer edges.
+      linkWidth={(l: FGLink) => (l.rel_type === 'INTERACTS_WITH' ? 0.8 * 0.6 : 0.8)}
       linkDirectionalArrowLength={2.8}
       linkDirectionalArrowRelPos={1}
       linkCurvature={0.12}
@@ -223,5 +288,28 @@ export default function GraphViewer3D({
       onLinkHover={(l: FGLink | null) => onEdgeHover(l)}
       onLinkClick={(l: FGLink | null) => onEdgeClick(l)}
     />
+    <div
+      data-testid="camera-hud"
+      style={{
+        position: 'absolute',
+        bottom: 16,
+        left: 16,
+        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+        fontSize: 11,
+        letterSpacing: '0.08em',
+        color: cameraMode === 'fly' ? '#f59e0b' : '#9ca3af',
+        background: 'rgba(5, 5, 8, 0.6)',
+        border: '1px solid rgba(255,255,255,0.08)',
+        padding: '4px 9px',
+        borderRadius: 4,
+        pointerEvents: 'none',
+        zIndex: 20,
+      }}
+    >
+      {cameraMode === 'fly'
+        ? 'FLY MODE · WASD move · R/F up·down · drag look · C/Esc orbit'
+        : 'ORBIT · press C to fly'}
+    </div>
+    </>
   );
 }

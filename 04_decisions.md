@@ -183,6 +183,7 @@ NCBI_API_KEY=                         # optional, raises rate limit 3→10 req/s
 TEXT2CYPHER_MODEL=anthropic/claude-sonnet-4-6
 SYNTHESIS_MODEL=anthropic/claude-sonnet-4-6
 CITATION_CHECK_MODEL=anthropic/claude-haiku-4-5-20251001
+EMBEDDING_MODEL=openai/text-embedding-3-small   # Phase 2
 
 # App config
 TISSUES=whole_blood,liver,brain_prefrontal_cortex
@@ -191,4 +192,78 @@ CITATION_AGENT_BATCH_SIZE=100
 CITATION_AGENT_CRON_HOUR=0            # midnight UTC
 DEFAULT_GENE=TP53                     # pre-loaded on frontend
 TISSUE_WEIGHT_THRESHOLD=0.3           # min weight for edge visibility
+
+# Phase 2 tunable scaling parameters (see 06_data_vision.md for full table)
+STRING_MIN_CONFIDENCE=0.9             # STRING PPI combined_score threshold; expand to 0.7→130k edges
+STRING_MAX_EXPAND_PER_NODE=10         # max INTERACTS_WITH neighbours per frontier step
+GWAS_MIN_SIGNIFICANCE=5e-8            # GWAS p-value cutoff (genome-wide significance)
+EMBEDDING_AGENT_BATCH_SIZE=50         # nodes per embedding agent run
+EMBEDDING_AGENT_CRON_HOUR=1          # 1am UTC (after citation agent at midnight)
 ```
+
+---
+
+## Phase 2 decisions (2026-06-16)
+
+All decisions from the post-MVP design session. See [06_data_vision.md](06_data_vision.md)
+for full data engineering map, [ADR-0007](docs/adr/0007-disease-as-first-class-nodes.md)
+and [ADR-0008](docs/adr/0008-neo4j-native-vector-indexing.md) for architectural rationale.
+
+### New node types
+
+| Node | Layer | Machine ID | Source |
+|------|-------|-----------|--------|
+| `Variant` | Genomics (distinct from Gene) | rsid (fallback: chr:pos:ref:alt GRCh38) | GWAS Catalog, ClinVar |
+| `Disease` | Phenotype (4th layer) | EFO ontology ID | GWAS Catalog, EFO |
+
+### New edge types
+
+| Edge | Label | Source | Conductance in traversal |
+|------|-------|--------|--------------------------|
+| Protein → Protein | `INTERACTS_WITH` | STRING v12 | STRING `combined_score` |
+| Variant → Gene | `IN_GENE` | GWAS Catalog / VEP | ~1.0 (structural) |
+| Variant → Disease | `ASSOCIATED_WITH` | GWAS Catalog, ClinVar | `-log10(p_value)` normalised 0–1 |
+| Gene → Disease | `IMPLICATED_IN` | GWAS rollup | inherited from variant associations |
+
+### Proteomics expansion
+
+Full proteome (~20k proteins) replaces the MVP TF-only slice. Protein nodes gain:
+`summary_text` (UniProt function comment), `go_terms` (list), `subcellular_loc`,
+`embedding` (1536-dim float array).
+
+### Semantic search
+
+Neo4j native vector indexing (ADR-0008). Three vector indexes: `gene_embeddings`,
+`protein_embeddings`, `disease_embeddings`. Populated by embedding agent (nightly
+batch, processes nodes where `summary_text IS NOT NULL AND embedding IS NULL`).
+Model: `openai/text-embedding-3-small` via OpenRouter.
+
+### Text2Cypher schema management
+
+Dynamic schema block generated from `apoc.meta.schema()` at startup, cached per
+process lifetime. Rules and examples sections remain hand-curated. At minimum one
+new curated example per new edge type.
+
+### Neo4j memory (docker-compose)
+
+Phase 2 required config (bump from MVP defaults):
+- `NEO4J_server_memory_heap_max__size: "4G"` (from 2G)
+- `NEO4J_server_memory_pagecache_size: "4G"` (from 1G)
+
+Migration to AuraDB Professional (~$65/month) when: ENCODE cCREs added, OR
+production reliability required, OR multi-user RBAC needed.
+
+### Pipeline runner
+
+`etl/run_pipeline.py` — Python DAG runner declaring load order and logging each
+step to `DataSource` nodes. Replaces manual per-script execution. No external
+orchestrator (Prefect/Dagster deferred until ≥3 agents need independent schedules).
+
+### ETL load order (phase 2)
+
+```
+01_hgnc → 02_gencode → 03_gtex → 05_proteins → 04_dorothea   ← existing
+→ 06_uniprot_enrich → 07_string → 08_gwas → 09_clinvar
+→ 10_ncbi_summaries → 11_gnomad
+```
+(then embedding agent and citation agent run on schedule)

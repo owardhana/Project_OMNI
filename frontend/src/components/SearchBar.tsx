@@ -1,17 +1,30 @@
 import { useState } from 'react';
 
 import { useSearch } from '../hooks/useSearch';
+import type { SearchResult } from '../types/graph';
 
 interface Props {
-  onSelect: (symbol: string) => void;
+  onSelect: (result: SearchResult) => void;
+}
+
+const TYPE_LABEL: Record<SearchResult['node_type'], string> = {
+  gene: 'Gene',
+  transcript: 'Transcript',
+  protein: 'Protein',
+  variant: 'Variant',
+  disease: 'Disease',
+};
+
+function displayName(r: SearchResult): string {
+  return r.hgnc_symbol ?? r.name ?? r.id;
 }
 
 export default function SearchBar({ onSelect }: Props) {
   const { query, setQuery, results, setResults } = useSearch();
   const [open, setOpen] = useState(false);
 
-  const pick = (symbol: string) => {
-    onSelect(symbol);
+  const pick = (r: SearchResult) => {
+    onSelect(r);
     setQuery('');
     setResults([]);
     setOpen(false);
@@ -21,7 +34,7 @@ export default function SearchBar({ onSelect }: Props) {
     <div className="search-bar">
       <input
         className="search-input"
-        placeholder="Search gene (e.g. TP53, BRCA2)…"
+        placeholder="Search gene, protein, disease…"
         value={query}
         onChange={(e) => {
           setQuery(e.target.value);
@@ -34,20 +47,20 @@ export default function SearchBar({ onSelect }: Props) {
             setResults([]);
             setOpen(false);
           } else if (e.key === 'Enter' && results.length > 0) {
-            pick(results[0].hgnc_symbol ?? results[0].ensembl_id);
+            pick(results[0]);
           }
         }}
       />
       {open && results.length > 0 && (
         <ul className="search-dropdown">
           {results.map((r) => (
-            <li key={r.ensembl_id}>
-              <button
-                className="search-option"
-                onClick={() => pick(r.hgnc_symbol ?? r.ensembl_id)}
-              >
+            <li key={`${r.node_type}:${r.id}`}>
+              <button className="search-option" onClick={() => pick(r)}>
                 <span className="search-symbol">
-                  {r.hgnc_symbol ?? r.ensembl_id}
+                  <span className={`type-chip type-${r.node_type}`}>
+                    {TYPE_LABEL[r.node_type]}
+                  </span>
+                  {displayName(r)}
                   {r.is_tf && <span className="tf-badge">TF</span>}
                 </span>
                 <span className="search-desc">{r.description}</span>

@@ -20,12 +20,20 @@ services:
       NEO4J_PLUGINS: '["apoc"]'
       # Allow APOC procedures (plugin is loaded per NEO4J_PLUGINS above).
       NEO4J_dbms_security_procedures_unrestricted: "apoc.*"
-      # Reasonable memory defaults for a laptop loading ~250k nodes.
-      NEO4J_server_memory_heap_initial__size: "1G"
-      NEO4J_server_memory_heap_max__size: "2G"
-      NEO4J_server_memory_pagecache_size: "1G"
+      # Phase 2 memory: full proteome + STRING/GWAS/ClinVar + ~370MB of
+      # embedding vectors. Heap 4G, pagecache 4G (06_data_vision.md, ADR-0008).
+      NEO4J_server_memory_heap_initial__size: "2G"
+      NEO4J_server_memory_heap_max__size: "4G"
+      NEO4J_server_memory_pagecache_size: "4G"
     volumes:
-      - ./data/neo4j:/data
+      # Named volume, NOT a host bind mount. On macOS/arm64 + Docker Desktop
+      # (VirtioFS), bind-mounting Neo4j's store directory triggers EDEADLK
+      # ("Resource deadlock avoided") on store page reads after a Docker restart,
+      # so Neo4j fails to open the database. A named volume lives inside the Linux
+      # VM filesystem and is the configuration Neo4j recommends on Docker Desktop.
+      # The graph is rebuilt deterministically by etl/run_pipeline.py from
+      # data/raw/, so no source data is lost by this change.
+      - neo4j_data:/data
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:7474 || exit 1"]
       interval: 10s
@@ -53,3 +61,9 @@ services:
       - "3000:3000"
     depends_on:
       - backend
+
+volumes:
+  # Neo4j store. Named volume (Linux-VM filesystem) avoids the macOS bind-mount
+  # EDEADLK issue documented on the neo4j service above. Rebuild with the ETL
+  # pipeline; wipe with `docker compose down -v` + re-run etl/run_pipeline.py.
+  neo4j_data:

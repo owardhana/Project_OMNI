@@ -40,12 +40,14 @@ Each node and edge carries tissue context. Same gene, different behavior in live
 
 ## Node types (full vision)
 
-| Layer | Node type | ID system | Example |
-|-------|-----------|-----------|---------|
-| Genomics | Gene | Ensembl (ENSG) | TP53, BRCA2 |
-| Transcriptomics | Transcript | Ensembl (ENST) | TP53-201, TP53-202 |
-| Proteomics | Protein | UniProt | P04637 (`TP53 (protein)`) |
-| Metabolomics | Metabolite | HMDB / ChEBI | Pyruvate |
+| Layer | Node type | ID system | Example | Status |
+|-------|-----------|-----------|---------|--------|
+| Genomics | Gene | Ensembl (ENSG) | TP53, BRCA2 | ✅ MVP |
+| Genomics | Variant | rsid / chr:pos:ref:alt | rs7903146 | ✅ Phase 2 |
+| Transcriptomics | Transcript | Ensembl (ENST) | TP53-201, TP53-202 | ✅ MVP |
+| Proteomics | Protein | UniProt | P04637 (`TP53 (protein)`) | ✅ Phase 2 (full proteome) |
+| Phenotype | Disease | EFO ontology ID | EFO_0001360 | ✅ Phase 2 |
+| Metabolomics | Metabolite | HMDB / ChEBI | Pyruvate | future |
 
 A **transcription factor** is not its own node type — it is a **Protein subtype**
 (`subtype = transcription_factor`) in the proteomics layer, distinguished by color.
@@ -54,15 +56,18 @@ future. Node kind is carried by `entity_kind ∈ {gene, transcript, protein}`.
 
 ## Edge types (full vision)
 
-| Edge | Label | Meaning | Direction | Source |
-|------|-------|---------|-----------|--------|
-| Protein(TF) → Gene | `REGULATES` | Regulatory binding, activates/represses (the TF **protein** acts on a gene) | Directed, downward | DoRothEA, ENCODE |
-| Gene → Transcript | `PRODUCES` | Splicing, produces isoform | Directed, upward | GENCODE, GTEx |
-| Transcript → Protein | `TRANSLATES_TO` | Translation (primary protein link) | Directed, upward | GENCODE SwissProt metadata |
-| Gene → Protein | `ENCODES` | Fallback protein link when transcript absent | Directed, upward | HGNC `uniprot_ids` |
-| Protein → Protein | _(future)_ | Binding, signaling, phosphorylation | Directed/undirected | STRING, PhosphoSitePlus |
-| Protein → Metabolite | _(future)_ | Enzymatic reaction | Directed | KEGG, Recon3D |
-| Gene ~ Gene | _(future)_ | Co-expression (labeled separately) | Undirected | GTEx, TCGA |
+| Edge | Label | Meaning | Direction | Source | Status |
+|------|-------|---------|-----------|--------|--------|
+| Protein(TF) → Gene | `REGULATES` | TF protein activates/represses gene expression | Directed, downward | DoRothEA | ✅ MVP |
+| Gene → Transcript | `PRODUCES` | Gene produces RNA isoform | Directed, upward | GENCODE, GTEx | ✅ MVP |
+| Transcript → Protein | `TRANSLATES_TO` | Translation (primary protein link) | Directed, upward | GENCODE SwissProt | ✅ MVP |
+| Gene → Protein | `ENCODES` | Fallback protein link when transcript absent | Directed, upward | HGNC | ✅ MVP |
+| Protein → Protein | `INTERACTS_WITH` | Physical binding / signaling | Intra-layer | STRING v12 | ✅ Phase 2 |
+| Variant → Gene | `IN_GENE` | Variant maps to gene locus | Directed | GWAS Catalog / VEP | ✅ Phase 2 |
+| Variant → Disease | `ASSOCIATED_WITH` | GWAS hit or ClinVar classification | Directed | GWAS Catalog, ClinVar | ✅ Phase 2 |
+| Gene → Disease | `IMPLICATED_IN` | Rolled-up gene-disease association | Directed | GWAS Catalog rollup | ✅ Phase 2 |
+| Protein → Metabolite | `CATALYSES` | Enzymatic reaction | Directed | KEGG, Recon3D | future |
+| Gene ~ Gene | `CO_EXPRESSED_WITH` | Co-expression | Undirected | GTEx, TCGA | future |
 
 MVP edges: `REGULATES`, `PRODUCES`, `TRANSLATES_TO`/`ENCODES` (TF slice). The rest
 are full-vision/future.

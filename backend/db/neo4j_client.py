@@ -12,16 +12,42 @@ from neo4j import AsyncDriver, AsyncGraphDatabase, AsyncSession
 from backend.config import settings
 
 # Index DDL run once on application startup. Neo4j 5 native syntax (no APOC).
-# The fulltext index powers /api/search; the b-tree indexes keep gene/transcript
-# lookups fast once the graph grows to hundreds of thousands of nodes.
+# The fulltext index powers /api/search; the b-tree indexes keep node lookups
+# fast once the graph grows to hundreds of thousands of nodes; the vector indexes
+# (Neo4j 5.11+ native, ADR-0008) power semantic search over node embeddings.
 INDEX_STATEMENTS: list[str] = [
+    # Phase 2: the search index was renamed gene_search -> node_search and widened
+    # to cover Protein and Disease (ADR-0007). Drop the old one for a clean rename.
+    "DROP INDEX gene_search IF EXISTS",
     """
-    CREATE FULLTEXT INDEX gene_search IF NOT EXISTS
-    FOR (n:Gene|Transcript) ON EACH [n.hgnc_symbol, n.description]
+    CREATE FULLTEXT INDEX node_search IF NOT EXISTS
+    FOR (n:Gene|Transcript|Protein|Disease)
+    ON EACH [n.hgnc_symbol, n.description, n.summary_text, n.name]
     """,
+    # B-tree indexes — existing Gene/Transcript plus Phase 2 node types.
     "CREATE INDEX gene_ensembl_idx IF NOT EXISTS FOR (n:Gene) ON (n.ensembl_id)",
     "CREATE INDEX gene_symbol_idx IF NOT EXISTS FOR (n:Gene) ON (n.hgnc_symbol)",
     "CREATE INDEX transcript_id_idx IF NOT EXISTS FOR (n:Transcript) ON (n.ensembl_tx_id)",
+    "CREATE INDEX protein_uniprot_idx IF NOT EXISTS FOR (n:Protein) ON (n.uniprot_id)",
+    "CREATE INDEX protein_symbol_idx IF NOT EXISTS FOR (n:Protein) ON (n.hgnc_symbol)",
+    "CREATE INDEX variant_rsid_idx IF NOT EXISTS FOR (n:Variant) ON (n.rsid)",
+    "CREATE INDEX disease_ontology_idx IF NOT EXISTS FOR (n:Disease) ON (n.ontology_id)",
+    # Vector indexes (Neo4j 5.11+ native syntax). 1536-dim cosine, per ADR-0008.
+    """
+    CREATE VECTOR INDEX gene_embeddings IF NOT EXISTS
+    FOR (n:Gene) ON (n.embedding)
+    OPTIONS {indexConfig: {`vector.dimensions`: 1536, `vector.similarity_function`: 'cosine'}}
+    """,
+    """
+    CREATE VECTOR INDEX protein_embeddings IF NOT EXISTS
+    FOR (n:Protein) ON (n.embedding)
+    OPTIONS {indexConfig: {`vector.dimensions`: 1536, `vector.similarity_function`: 'cosine'}}
+    """,
+    """
+    CREATE VECTOR INDEX disease_embeddings IF NOT EXISTS
+    FOR (n:Disease) ON (n.embedding)
+    OPTIONS {indexConfig: {`vector.dimensions`: 1536, `vector.similarity_function`: 'cosine'}}
+    """,
 ]
 
 _driver: AsyncDriver | None = None

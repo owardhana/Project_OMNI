@@ -17,34 +17,100 @@ Returns the same raw dict shape as the old gene queries
 ({"nodes": [...], "edges": [...]}) so the API model builders are unchanged.
 """
 
+import math
+
 from backend.config import settings
 from backend.db.neo4j_client import get_session
 
-_TRAVERSAL_REL_TYPES = ["REGULATES", "PRODUCES", "TRANSLATES_TO", "ENCODES"]
+_TRAVERSAL_REL_TYPES = [
+    "REGULATES", "PRODUCES", "TRANSLATES_TO", "ENCODES",
+    "INTERACTS_WITH", "ASSOCIATED_WITH", "IN_GENE", "IMPLICATED_IN",
+]
 
 # Depth guard: signal decays by at most `decay` per hop, so it crosses any
 # positive floor within a bounded number of hops; this is a hard safety cap.
 _MAX_DEPTH = 8
 
 
-def _conductance(rel_type: str, confidence: float | None) -> float:
+def _conductance(rel_type: str, rel_props: dict) -> float:
+    """Per-edge conductance (ADR-0005, extended for Phase 2 — 06_data_vision.md)."""
     if rel_type == "REGULATES":
-        return float(confidence) if confidence is not None else 0.5
+        c = rel_props.get("confidence")
+        return float(c) if c is not None else 0.5
     if rel_type == "PRODUCES":
         return settings.PRODUCES_CONDUCTANCE
-    return settings.STRUCTURAL_CONDUCTANCE  # TRANSLATES_TO / ENCODES
+    if rel_type in ("TRANSLATES_TO", "ENCODES", "IN_GENE"):
+        return settings.STRUCTURAL_CONDUCTANCE  # ~1.0, structural
+    if rel_type == "INTERACTS_WITH":
+        c = rel_props.get("combined_score")
+        return float(c) if c is not None else 0.5
+    if rel_type == "ASSOCIATED_WITH":
+        p = rel_props.get("p_value")
+        if p and p > 0:
+            return min(1.0, -math.log10(p) / 30.0)  # p=5e-8->~0.4, p=1e-30->1.0
+        return 0.4
+    if rel_type == "IMPLICATED_IN":
+        return 0.5  # gene-disease rollup, lower weight
+    return settings.STRUCTURAL_CONDUCTANCE
+
+
+# High-degree Phase-2 edge types capped per node per frontier ring. The prompt
+# specifies the cap for INTERACTS_WITH (hub proteins); the same hub explosion
+# applies to a gene's variants (IN_GENE) and diseases (IMPLICATED_IN) and a
+# common disease's variants (ASSOCIATED_WITH). Capping all four lets a hub seed
+# reach MULTIPLE hops (e.g. gene -> protein -> INTERACTS_WITH) within max_nodes
+# instead of one edge type flooding ring 1. Structural (PRODUCES/TRANSLATES_TO/
+# ENCODES) and REGULATES edges stay uncapped — they are the molecular backbone.
+_DENSE_CAPPED = {"INTERACTS_WITH", "ASSOCIATED_WITH", "IN_GENE", "IMPLICATED_IN"}
+
+
+def _edge_rank(rel_type: str, rel_props: dict) -> float:
+    """Higher = kept first when capping a node's expansion of a dense edge type."""
+    props = rel_props or {}
+    if rel_type == "INTERACTS_WITH":
+        return props.get("combined_score") or 0.0
+    if rel_type == "ASSOCIATED_WITH":
+        p = props.get("p_value")
+        return -math.log10(p) if (p and p > 0) else 0.0  # strongest GWAS first
+    return 0.0  # IN_GENE / IMPLICATED_IN: structural rollup, no score -> first-k
+
+
+def _cap_dense_frontier(rows: list[dict]) -> list[dict]:
+    """Cap each node's expansion of the dense Phase-2 edge types to the top-k
+    (settings.STRING_MAX_EXPAND_PER_NODE) so no single hub floods one frontier
+    ring. Ties break deterministically by neighbour key."""
+    cap = settings.STRING_MAX_EXPAND_PER_NODE
+    grouped: dict[tuple[str, str], list[dict]] = {}
+    passthrough: list[dict] = []
+    for row in rows:
+        if row["rel_type"] in _DENSE_CAPPED:
+            grouped.setdefault((row["from_eid"], row["rel_type"]), []).append(row)
+        else:
+            passthrough.append(row)
+    for (_from_eid, rel_type), group in grouped.items():
+        group.sort(
+            key=lambda r: (-_edge_rank(rel_type, r["rel_props"]), r["nb_key"] or "")
+        )
+        passthrough.extend(group[:cap])
+    return passthrough
 
 
 # Resolve seed business keys (ensembl_id / ensembl_tx_id / uniprot_id) to the
 # internal elementId + node payload the traversal works with.
 _RESOLVE_SEEDS = """
 UNWIND $keys AS key
-MATCH (n)
-WHERE n.ensembl_id = key OR n.ensembl_tx_id = key OR n.uniprot_id = key
+CALL {
+  WITH key
+  MATCH (n:Gene {ensembl_id: key}) RETURN n
+  UNION WITH key MATCH (n:Transcript {ensembl_tx_id: key}) RETURN n
+  UNION WITH key MATCH (n:Protein {uniprot_id: key}) RETURN n
+  UNION WITH key MATCH (n:Variant {rsid: key}) RETURN n
+  UNION WITH key MATCH (n:Disease {ontology_id: key}) RETURN n
+}
 RETURN elementId(n) AS eid,
        labels(n)[0] AS label,
        properties(n) AS props,
-       coalesce(n.ensembl_id, n.ensembl_tx_id, n.uniprot_id) AS node_key
+       coalesce(n.ensembl_id, n.ensembl_tx_id, n.uniprot_id, n.rsid, n.ontology_id) AS node_key
 """
 
 # Expand one whole frontier ring in a single query.
@@ -57,15 +123,15 @@ RETURN eid AS from_eid,
        elementId(nb) AS nb_eid,
        labels(nb)[0] AS nb_label,
        properties(nb) AS nb_props,
-       coalesce(nb.ensembl_id, nb.ensembl_tx_id, nb.uniprot_id) AS nb_key,
+       coalesce(nb.ensembl_id, nb.ensembl_tx_id, nb.uniprot_id, nb.rsid, nb.ontology_id) AS nb_key,
        type(r) AS rel_type,
        elementId(r) AS rel_eid,
        r.confidence AS confidence,
        properties(r) AS rel_props,
        elementId(startNode(r)) AS start_eid,
        elementId(endNode(r)) AS end_eid,
-       coalesce(startNode(r).ensembl_id, startNode(r).ensembl_tx_id, startNode(r).uniprot_id) AS source_key,
-       coalesce(endNode(r).ensembl_id, endNode(r).ensembl_tx_id, endNode(r).uniprot_id) AS target_key
+       coalesce(startNode(r).ensembl_id, startNode(r).ensembl_tx_id, startNode(r).uniprot_id, startNode(r).rsid, startNode(r).ontology_id) AS source_key,
+       coalesce(endNode(r).ensembl_id, endNode(r).ensembl_tx_id, endNode(r).uniprot_id, endNode(r).rsid, endNode(r).ontology_id) AS target_key
 """
 
 # is_tf for a gene now means "encodes a TF protein", reachable via the
@@ -81,9 +147,10 @@ RETURN eid AS ensembl_id,
 
 
 def _node_kind(label: str) -> str:
-    return {"Gene": "gene", "Transcript": "transcript", "Protein": "protein"}.get(
-        label, label.lower()
-    )
+    return {
+        "Gene": "gene", "Transcript": "transcript", "Protein": "protein",
+        "Variant": "variant", "Disease": "disease",
+    }.get(label, label.lower())
 
 
 async def signal_decay_subgraph(
@@ -130,10 +197,11 @@ async def signal_decay_subgraph(
         depth = 0
         while frontier and depth < _MAX_DEPTH and len(node_payload) < max_nodes:
             rows = await (await session.run(_EXPAND_RING, eids=frontier)).data()
+            rows = _cap_dense_frontier(rows)
             expanded.update(frontier)
             next_frontier: list[str] = []
             for row in rows:
-                cond = _conductance(row["rel_type"], row["confidence"])
+                cond = _conductance(row["rel_type"], row["rel_props"])
                 new_sig = signal[row["from_eid"]] * decay * cond
                 if new_sig < min_signal:
                     continue

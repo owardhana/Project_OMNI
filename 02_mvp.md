@@ -1,5 +1,12 @@
 # OmniGraph — MVP Specification
 
+> ✅ **Phase 1 complete.** This spec is implemented and live on `main`.
+> Phase 2 (full proteome, STRING PPIs, Variants, Disease nodes, semantic search)
+> is planned in [06_data_vision.md](06_data_vision.md) and implemented via
+> [07_phase2_build_prompt.md](07_phase2_build_prompt.md) on branch
+> `phase-2-multiomics-expansion`. Do not use this file as a guide for new work —
+> use the Phase 2 documents instead.
+
 ## Goal
 
 Working demo for computational biology collaborators at ~3 months.

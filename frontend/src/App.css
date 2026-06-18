@@ -491,3 +491,158 @@
   color: var(--text);
 }
 .pmid-pill:hover { background: var(--border); }
+
+/* ---- Phase 2: mixed search chips, variant/disease legend + detail ---- */
+.type-chip {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 5px;
+  border-radius: 3px;
+  margin-right: 6px;
+  color: #0b0b0d;
+}
+.type-gene { background: #4ade80; }
+.type-transcript { background: #60a5fa; }
+.type-protein { background: #c084fc; }
+.type-variant { background: #2dd4bf; }
+.type-disease { background: #f472b6; }
+
+.dot.variant { background: #2dd4bf; }
+.dot.disease { background: #f472b6; }
+
+.flag-chip {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  margin-left: 6px;
+  border-radius: 3px;
+  background: #f59e0b;
+  color: #0b0b0d;
+}
+.chip-row { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0; }
+.go-chip {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: rgba(192, 132, 252, 0.16);
+  color: #c084fc;
+}
+.truncate-3 {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+/* ---- Phase 14: entity browser + multi-load banner ---- */
+.entity-handle {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  transform: translateY(-50%);
+  width: 24px;
+  padding: 14px 4px;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  background: #faf9f5;
+  color: #44423d;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-left: none;
+  border-radius: 0 6px 6px 0;
+  cursor: pointer;
+  z-index: 30;
+}
+.entity-browser {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: #faf9f5;
+  border-right: 1px solid rgba(0, 0, 0, 0.12);
+  box-shadow: 2px 0 14px rgba(0, 0, 0, 0.25);
+  z-index: 30;
+  overflow: hidden;
+}
+.entity-browser-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: #2a2926;
+}
+.eb-search { width: 100%; }
+.eb-tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+.eb-tab {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  background: transparent;
+  cursor: pointer;
+}
+.eb-tab.active { background: #2a2926; color: #faf9f5; }
+.eb-filter-toggle {
+  text-align: left;
+  background: none;
+  border: none;
+  font-size: 12px;
+  color: #6b6a66;
+  cursor: pointer;
+}
+.eb-filters { display: flex; flex-direction: column; gap: 6px; font-size: 11px; }
+.eb-filters label { display: flex; flex-direction: column; gap: 2px; }
+.eb-list {
+  flex: 1;
+  overflow-y: auto;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+}
+.eb-row { border-bottom: 1px solid rgba(0, 0, 0, 0.05); }
+.eb-row label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 2px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.eb-name { font-weight: 600; color: #2a2926; }
+.eb-desc { color: #8a8884; font-size: 11px; margin-left: auto; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.eb-empty { padding: 12px 4px; }
+.eb-more { font-size: 12px; padding: 5px; cursor: pointer; }
+.eb-footer { display: flex; gap: 6px; border-top: 1px solid rgba(0, 0, 0, 0.1); padding-top: 8px; }
+.eb-load { flex: 1; padding: 7px; background: #2a2926; color: #faf9f5; border: none; border-radius: 5px; cursor: pointer; }
+.eb-load:disabled { opacity: 0.4; cursor: default; }
+.eb-clear { padding: 7px 10px; border: 1px solid rgba(0, 0, 0, 0.15); background: transparent; border-radius: 5px; cursor: pointer; }
+.graph-banner {
+  position: absolute;
+  top: 56px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  max-width: 70vw;
+  padding: 8px 12px;
+  background: rgba(20, 18, 16, 0.92);
+  color: #f3f0ea;
+  border: 1px solid rgba(244, 114, 182, 0.4);
+  border-radius: 6px;
+  font-size: 12px;
+  z-index: 25;
+}
+.banner-btn { font-size: 11px; padding: 3px 8px; border-radius: 4px; border: 1px solid #f472b6; background: transparent; color: #f472b6; cursor: pointer; }
+.path-note { color: #fb923c; }
