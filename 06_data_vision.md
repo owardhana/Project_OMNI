@@ -1,15 +1,16 @@
 # OmniGraph — Data Vision
 
-Decisions made during the post-MVP design session (2026-06-16).
-This document is a data engineering map: what lives on each node, what sources
-feed each layer, how nodes connect, and how data is stored and processed.
-It is NOT a spec — implementation details live in ADRs and ETL scripts.
+> ✅ **Phase 2 complete** (2026-06-21, branch `phase-2-tests-and-review-fixes`, merged into main).
+> Sections marked **[Phase 2]** describe what was implemented. Sections marked
+> **[Phase 3 — deferred]** are the open backlog for the next build cycle.
+> This document is a data engineering map — not a spec.
+> Implementation details live in ADRs and ETL scripts.
 
 ---
 
-## Direction
+## Phase 2 direction (implemented)
 
-Next phase targets two biological question classes the MVP cannot answer:
+Phase 2 answered two biological question classes the MVP could not:
 1. **Protein signaling chains** — how does a signal propagate from a TF through
    the protein interaction network?
 2. **Disease mechanisms** — which genes/proteins/variants are implicated in a
@@ -17,27 +18,24 @@ Next phase targets two biological question classes the MVP cannot answer:
 
 ---
 
-## Layer expansion
+## Layer expansion [Phase 2 — implemented]
 
-### Proteomics layer — full proteome
-Expand from the current TF-only slice (~1,500 proteins) to all protein-coding
-genes (~20k proteins). Machine ID = UniProt accession. Required before STRING
-PPIs can be loaded (PPI edges need both endpoints to be Protein nodes).
+### Proteomics layer — full proteome ✅
+Expanded from TF-only slice (~1,500 proteins) to all protein-coding genes
+(~20k proteins via `etl/06_uniprot_enrich.py`). Machine ID = UniProt accession.
 
-### Genomics layer — Variant nodes
-Add `(:Variant)` as a new node type **within the genomics layer** (sub-gene
-resolution, distinct shape/color from Gene). Variants from GWAS Catalog and
-ClinVar are the initial scope. ENCODE regulatory elements (1.7M cCREs) are
-deferred — they are an infrastructure decision, not just an ETL decision.
+### Genomics layer — Variant nodes ✅
+`(:Variant)` added as a new node type within the genomics layer (teal, sub-gene
+resolution). Source: GWAS Catalog (p < 5×10⁻⁸) + ClinVar. ~30–50k unique nodes.
+ENCODE regulatory elements (1.7M cCREs) remain deferred — infrastructure decision.
 
-### New non-omics layer — Disease/Phenotype nodes
-`(:Disease)` nodes are first-class graph nodes (traversable, not edge
-attributes). They form a 4th layer above proteomics in the stack — the
-"phenotype layer." Machine ID = EFO ontology ID (from GWAS Catalog).
+### Phenotype layer — Disease nodes ✅
+`(:Disease)` as first-class graph nodes (4th layer, hot pink, Y=600 in 3D scene).
+Machine ID = EFO ontology ID. Source: GWAS Catalog ontology terms. See ADR-0007.
 
 ---
 
-## Node schemas (proposed additions)
+## Node schemas [Phase 2 — implemented]
 
 ### Protein (expanded — currently TF slice only)
 ```
@@ -129,7 +127,7 @@ pmids               [string]
 
 ---
 
-## Data sources (next phase)
+## Data sources [Phase 2 — implemented]
 
 | Source | Feeds | Format | New ETL script |
 |--------|-------|--------|----------------|
@@ -208,27 +206,25 @@ called to discover what nodes and edges to create.
 
 ## Pipeline architecture
 
-### ETL pipeline runner
-Replace manual per-script execution with `etl/run_pipeline.py` — a Python
-runner that declares the DAG, enforces run order, and logs each step to the
-existing `DataSource` nodes in Neo4j. No external orchestrator yet.
+### ETL pipeline runner ✅
+`etl/run_pipeline.py` implemented — Python DAG runner with DataSource logging.
 
-**Load order (next phase):**
+**Load order (Phase 2, implemented):**
 ```
-01_hgnc → 02_gencode → 03_gtex → 05_proteins → 04_dorothea   ← existing
+01_hgnc → 02_gencode → 03_gtex → 05_proteins → 04_dorothea   ← Phase 1
 → 06_uniprot_enrich → 07_string → 08_gwas → 09_clinvar
-→ 10_ncbi_summaries → 11_gnomad
+→ 10_ncbi_summaries → 11_gnomad                               ← Phase 2
 ```
 
 ### Background agents
 Three scheduled agents, all following the citation agent pattern (batch,
 process N items per run where a trigger condition is met):
 
-| Agent | Trigger condition | Batch size | Schedule |
-|-------|------------------|------------|----------|
-| Citation agent | `pmids = [] AND citation_attempted = false` | 100 edges | Nightly |
-| Embedding agent | `summary_text IS NOT NULL AND embedding IS NULL` | 50–100 nodes | Nightly / post-ETL |
-| Extraction agent (v3+) | New papers in bioRxiv/PubMed | TBD | Weekly |
+| Agent | Trigger condition | Batch size | Schedule | Status |
+|-------|------------------|------------|----------|--------|
+| Citation agent | `pmids = [] AND citation_attempted = false` | 100 edges | Nightly | ✅ Phase 1 |
+| Embedding agent | `summary_text IS NOT NULL AND embedding IS NULL` | 50 nodes | Nightly / post-ETL | ✅ Phase 2 |
+| Extraction agent | New papers in bioRxiv/PubMed | TBD | Weekly | Phase 3 — deferred |
 
 Orchestrator (Prefect/Dagster) deferred until all three agents need
 independent scheduling — at that point the overhead pays for itself.
@@ -391,11 +387,37 @@ via entity browser multi-select. "Load selected (N)" adds to empty canvas.
 
 ---
 
-## Open decisions (to be grilled)
+## Phase 3 backlog — deferred decisions
 
-- ~~STRING confidence threshold~~ → resolved: start at >900 (~50k edges), `STRING_MIN_CONFIDENCE` env var
-- ~~Signal-decay conductance for `INTERACTS_WITH`~~ → resolved: same `d` as inter-layer; add per-node expansion cap (top-k by `combined_score` at each frontier step, default k=10, configurable via `STRING_MAX_EXPAND_PER_NODE` env var — tunable scaling parameter)
-- ~~TCGA cancer data scope~~ → deferred to next phase (requires full proteome + Disease nodes to be meaningful)
-- ~~GTEx tissues~~ → stay at 3 (whole blood, liver, brain prefrontal cortex) for this phase; expand to disease-relevant tissue panel (kidney, heart, lung, pancreas, etc.) as a standalone ETL task in a later phase
-- ~~Text2Cypher prompt management~~ → resolved: dynamic schema block from `apoc.meta.schema()` generated at startup (APOC already loaded), cached per process lifetime; rules + examples remain hand-curated, extended with ≥1 example per new edge type
-- ~~Frontend subgraph size / Disease search~~ → resolved: Disease is a first-class search entry point alongside gene search; `ASSOCIATED_WITH` conductance = `-log10(p_value)` normalised 0–1 against genome-wide significance floor (p=5×10⁻⁸ → moderate; p=10⁻³⁰ → high)
+Items below were explicitly deferred from Phase 2. They are pre-grilled (no new
+design session required) but not yet implemented.
+
+### Data sources (high priority)
+
+| Item | Why deferred | Pre-decided approach |
+|------|-------------|---------------------|
+| **TCGA cancer differential expression** | Needed full proteome + Disease nodes first (now done) | TCGA-PANCAN cohort; `CO_EXPRESSED_WITH` and tumor-vs-normal `EXPRESSED_IN` edges; `cancer_gene` flag (COSMIC/OncoKB) on Gene already modelled |
+| **GTEx tissue panel expansion** | Low urgency vs disease data | Add kidney, heart, lung, pancreas, adipose to `PRODUCES` tissue weight props; same pattern as existing 3 tissues |
+| **ENCODE regulatory elements (cCREs)** | Infrastructure decision — 1.7M nodes requires AuraDB | Only after migration to AuraDB Professional; adds `(:cCRE)` node type in genomics plane |
+
+### Agents (Phase 3)
+
+| Agent | Trigger | Notes |
+|-------|---------|-------|
+| **Literature extraction agent** | New bioRxiv/PubMed papers | Proposes new edges from text; validation queue before write; see `Extraction agent (v3+)` in AGENTS.md |
+
+### Infrastructure triggers
+
+| Trigger | Action |
+|---------|--------|
+| ENCODE cCREs added | Migrate to AuraDB Professional (~$65/month) |
+| >500k embedded nodes OR >500ms ANN latency | Revisit Neo4j vector index vs external store (ADR-0008) |
+| ≥3 agents need independent schedules | Add Prefect/Dagster orchestrator |
+
+### Biological questions not yet answerable
+
+- Tumor vs normal expression differences (requires TCGA)
+- Cell-type resolution (requires CellxGene / single-cell integration)
+- Metabolite layer (KEGG/Recon3D) — layer 5 in the future stack
+- Co-expression networks (`CO_EXPRESSED_WITH` — GTEx/TCGA)
+- Regulatory element → Gene links (`BINDS` — ENCODE ChIP-seq)

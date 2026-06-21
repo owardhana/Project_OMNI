@@ -203,11 +203,12 @@ EMBEDDING_AGENT_CRON_HOUR=1          # 1am UTC (after citation agent at midnight
 
 ---
 
-## Phase 2 decisions (2026-06-16)
+## Phase 2 decisions (designed 2026-06-16 · implemented 2026-06-21)
 
-All decisions from the post-MVP design session. See [06_data_vision.md](06_data_vision.md)
-for full data engineering map, [ADR-0007](docs/adr/0007-disease-as-first-class-nodes.md)
-and [ADR-0008](docs/adr/0008-neo4j-native-vector-indexing.md) for architectural rationale.
+> ✅ Fully implemented on branch `phase-2-tests-and-review-fixes`.
+> See [06_data_vision.md](06_data_vision.md) for the full data engineering map,
+> [ADR-0007](docs/adr/0007-disease-as-first-class-nodes.md) and
+> [ADR-0008](docs/adr/0008-neo4j-native-vector-indexing.md) for architectural rationale.
 
 ### New node types
 
