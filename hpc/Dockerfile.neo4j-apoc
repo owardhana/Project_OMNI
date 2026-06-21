@@ -1,25 +1,22 @@
-# OmniGraph — Neo4j 5 + APOC image for HPC Singularity deployment.
+# OmniGraph — Neo4j 5 + APOC image for HPC Singularity (owardhan/project_omni:neo4j-5).
 #
-# Bakes APOC in at build time so no outbound internet is needed at container
-# startup on the compute node. Build once, push to Docker Hub, pull on HPC
-# via singularity pull.
+# Key differences from the local docker-compose neo4j:5 image:
+#   - APOC JAR baked in (no runtime download on compute node)
+#   - Custom ENTRYPOINT that writes data to $HOME/neo4j_data
+#     so Singularity's auto-bind of $HOME keeps data persistent between sessions.
 #
 # Build & push (from repo root):
 #   docker build -t owardhan/project_omni:neo4j-5 -f hpc/Dockerfile.neo4j-apoc .
 #   docker push owardhan/project_omni:neo4j-5
 #
-# Pull on HPC:
-#   singularity pull ~/omnigraph-neo4j.sif docker://owardhan/project_omni:neo4j-5
-#
-# Or push to St. Jude Harbor after tagging:
-#   docker tag owardhan/project_omni:neo4j-5 svlprhpcreg01.stjude.org/<project>/omnigraph-neo4j:5
-#   docker push svlprhpcreg01.stjude.org/<project>/omnigraph-neo4j:5
+# On HPC OnDemand form — just fill in:
+#   URL:     docker://owardhan/project_omni:neo4j-5
+#   Command: (leave blank)
 
 FROM neo4j:5
 
-# APOC version must match the Neo4j minor version installed in the base image.
-# Check the current neo4j:5 version with: docker run --rm neo4j:5 neo4j --version
-# Then find the matching APOC release at: https://github.com/neo4j/apoc/releases
+# APOC version must match the Neo4j minor version in this base image.
+# Confirmed: neo4j:5 → 5.26.27, so APOC 5.26.1 is correct.
 ARG APOC_VERSION=5.26.1
 
 RUN apt-get update -q && apt-get install -y -q wget \
@@ -27,7 +24,15 @@ RUN apt-get update -q && apt-get install -y -q wget \
  && wget -q -O /var/lib/neo4j/plugins/apoc-${APOC_VERSION}-core.jar \
     "https://github.com/neo4j/apoc/releases/download/${APOC_VERSION}/apoc-${APOC_VERSION}-core.jar"
 
-# Allow all APOC procedures. These env vars are translated to neo4j.conf at
-# startup by the Docker entrypoint (single _ -> dot, __ -> underscore).
 ENV NEO4J_dbms_security_procedures_unrestricted=apoc.*
 ENV NEO4J_dbms_security_procedures_allowlist=apoc.*
+
+# Copy the HPC entrypoint and make it the default startup.
+# Singularity's `singularity run` will call this, which:
+#   1. Creates $HOME/neo4j_data (persists via Singularity's $HOME bind)
+#   2. Sets memory and auth env vars
+#   3. Hands off to the original Neo4j Docker entrypoint
+COPY hpc/neo4j_singularity_entrypoint.sh /neo4j_singularity_entrypoint.sh
+RUN chmod +x /neo4j_singularity_entrypoint.sh
+
+ENTRYPOINT ["/neo4j_singularity_entrypoint.sh"]
