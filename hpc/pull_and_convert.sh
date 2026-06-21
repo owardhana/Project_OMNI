@@ -7,15 +7,15 @@
 #   bash hpc/pull_and_convert.sh [IMAGE_SOURCE]
 #
 # IMAGE_SOURCE options:
-#   docker://<yourdockerhub>/omnigraph-neo4j:5          (Docker Hub, public)
-#   docker://svlprhpcreg01.stjude.org/<proj>/omnigraph-neo4j:5  (Harbor)
+#   docker://owardhan/project_omni:neo4j-5              (Docker Hub — default, APOC baked in)
+#   docker://svlprhpcreg01.stjude.org/<proj>/omnigraph-neo4j:5  (Harbor, if pushed there)
 #   docker://neo4j:5                                    (plain neo4j, no APOC baked in)
 #
 # Output: ~/omnigraph-neo4j.sif
 
 set -euo pipefail
 
-DEFAULT_IMAGE="docker://neo4j:5"
+DEFAULT_IMAGE="docker://owardhan/project_omni:neo4j-5"
 IMAGE="${1:-${DEFAULT_IMAGE}}"
 OUTPUT="${HOME}/omnigraph-neo4j.sif"
 

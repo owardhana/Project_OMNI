@@ -1,15 +1,18 @@
 # OmniGraph — Neo4j 5 + APOC image for HPC Singularity deployment.
 #
 # Bakes APOC in at build time so no outbound internet is needed at container
-# startup on the compute node. Build once, push to Docker Hub or St. Jude
-# Harbor, pull on HPC via singularity pull.
+# startup on the compute node. Build once, push to Docker Hub, pull on HPC
+# via singularity pull.
 #
-# Build & push:
-#   docker build -t <yourdockerhub>/omnigraph-neo4j:5 -f hpc/Dockerfile.neo4j-apoc .
-#   docker push <yourdockerhub>/omnigraph-neo4j:5
+# Build & push (from repo root):
+#   docker build -t owardhan/project_omni:neo4j-5 -f hpc/Dockerfile.neo4j-apoc .
+#   docker push owardhan/project_omni:neo4j-5
 #
-# Or push to St. Jude Harbor:
-#   docker tag <yourdockerhub>/omnigraph-neo4j:5 svlprhpcreg01.stjude.org/<project>/omnigraph-neo4j:5
+# Pull on HPC:
+#   singularity pull ~/omnigraph-neo4j.sif docker://owardhan/project_omni:neo4j-5
+#
+# Or push to St. Jude Harbor after tagging:
+#   docker tag owardhan/project_omni:neo4j-5 svlprhpcreg01.stjude.org/<project>/omnigraph-neo4j:5
 #   docker push svlprhpcreg01.stjude.org/<project>/omnigraph-neo4j:5
 
 FROM neo4j:5

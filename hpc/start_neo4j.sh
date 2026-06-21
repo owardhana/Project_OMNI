@@ -31,8 +31,8 @@ echo ""
 if [[ ! -f "${SIF}" ]]; then
   echo "ERROR: SIF not found at ${SIF}"
   echo "Pull it first:"
-  echo "  singularity pull ${SIF} docker://<yourdockerhub>/omnigraph-neo4j:5"
-  echo "  # or from St. Jude Harbor:"
+  echo "  singularity pull ${SIF} docker://owardhan/project_omni:neo4j-5"
+  echo "  # or from St. Jude Harbor (if you pushed there):"
   echo "  singularity pull ${SIF} docker://svlprhpcreg01.stjude.org/<project>/omnigraph-neo4j:5"
   exit 1
 fi
