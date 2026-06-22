@@ -19,7 +19,10 @@ the script aborts with the columns it DID find rather than silently mis-parsing.
     etl/.venv/bin/python etl/12_cosmic.py
 """
 
+import gzip
+import io
 import sys
+import tarfile
 import time
 from pathlib import Path
 
@@ -29,11 +32,23 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from utils.neo4j_client import close_driver, get_session  # noqa: E402
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
-COSMIC_FILE = _PROJECT_ROOT / "data" / "raw" / "cosmic_cancer_gene_census.csv"
-REQUIRED_COLUMNS = ["Gene Symbol", "Tier"]
+RAW_DIR = _PROJECT_ROOT / "data" / "raw"
+# The COSMIC CGC download comes in several shapes depending on version/path:
+#   - v104 tar:   Cosmic_CancerGeneCensus_Tsv_*_*.tar  (contains a *.tsv.gz)
+#   - plain gz:   *CancerGeneCensus*.tsv.gz
+#   - legacy csv: cosmic_cancer_gene_census.csv
+# Resolve whichever is present (newest by name); the table is read uniformly below.
+COSMIC_CANDIDATES = [
+    "Cosmic_CancerGeneCensus_Tsv_*.tar",
+    "*CancerGeneCensus*.tsv.gz",
+    "cosmic_cancer_gene_census.csv",
+]
+# Column names differ across releases (v104 uppercases them).
+SYMBOL_COLS = ["GENE_SYMBOL", "Gene Symbol", "Gene symbol"]
+TIER_COLS = ["TIER", "Tier"]
 WRITE_BATCH = 5000
 SOURCE_DB = "COSMIC_CGC"
-SOURCE_VERSION = "v99"
+SOURCE_VERSION = "v104"
 
 # MATCH only — never CREATE. Returns the count actually matched so we can report
 # how many Census symbols were absent from the graph.
@@ -45,36 +60,76 @@ RETURN count(g) AS c
 """
 
 
-def main() -> None:
-    start = time.time()
-    if not COSMIC_FILE.exists():
-        raise FileNotFoundError(
-            f"{COSMIC_FILE} not found. Run etl/00_download.sh first "
-            "(COSMIC may require a manual login download — see 00_download.sh)."
-        )
+def _resolve_cosmic_file() -> Path:
+    for pattern in COSMIC_CANDIDATES:
+        hits = sorted(RAW_DIR.glob(pattern))
+        if hits:
+            return hits[-1]
+    raise FileNotFoundError(
+        f"No COSMIC CGC file in {RAW_DIR} (looked for {COSMIC_CANDIDATES}). "
+        "COSMIC requires a free account — download the Cancer Gene Census manually."
+    )
 
-    # The Sanger endpoint serves an HTML login page (not a CSV) to unauthenticated
-    # clients; detect that explicitly rather than emitting a confusing pandas error.
-    with open(COSMIC_FILE, "rb") as fh:
+
+def _first_col(columns, candidates):
+    for c in candidates:
+        if c in columns:
+            return c
+    return None
+
+
+def _read_cosmic_df(path: Path) -> pd.DataFrame:
+    """Read the CGC table from a v104 .tar (inner *.tsv.gz), a plain .tsv.gz, or a
+    legacy .csv — guarding the .csv path against the HTML login page Sanger serves
+    to unauthenticated clients (ADR-0003 discipline)."""
+    name = path.name.lower()
+    if name.endswith(".tar"):
+        with tarfile.open(path) as tar:
+            member = next(
+                (m for m in tar.getmembers()
+                 if "cancergenecensus" in m.name.lower()
+                 and m.name.lower().endswith((".tsv.gz", ".csv.gz", ".tsv", ".csv"))),
+                None,
+            )
+            if member is None:
+                print(f"ABORT: no Cancer Gene Census table inside {path.name}; "
+                      f"members: {[m.name for m in tar.getmembers()]}")
+                sys.exit(1)
+            raw = tar.extractfile(member).read()
+            mname = member.name.lower()
+            data = gzip.decompress(raw) if mname.endswith(".gz") else raw
+            sep = "\t" if ".tsv" in mname else ","
+            return pd.read_csv(io.BytesIO(data), sep=sep, dtype=str, low_memory=False)
+    if name.endswith((".tsv.gz", ".tsv")):
+        return pd.read_csv(path, sep="\t", dtype=str, compression="infer", low_memory=False)
+    # legacy .csv — detect the HTML login page before pandas mis-parses it.
+    with open(path, "rb") as fh:
         head = fh.read(64).lstrip().lower()
     if head.startswith(b"<!doctype") or head.startswith(b"<html"):
-        print(f"ABORT: {COSMIC_FILE.name} is an HTML page (a COSMIC login page), "
-              "not CSV data. COSMIC requires a free account — download "
-              "cancer_gene_census.csv manually into data/raw/ (see 00_download.sh).")
+        print(f"ABORT: {path.name} is an HTML page (a COSMIC login page), not data. "
+              "COSMIC requires a free account — download the Cancer Gene Census "
+              "manually into data/raw/ (see 00_download.sh).")
         sys.exit(1)
+    return pd.read_csv(path, dtype=str, low_memory=False)
 
-    header = pd.read_csv(COSMIC_FILE, nrows=0)
-    missing = [c for c in REQUIRED_COLUMNS if c not in header.columns]
-    if missing:
-        print(f"ABORT: COSMIC CGC CSV missing required columns: {missing}")
-        print(f"Columns present: {list(header.columns)}")
+
+def main() -> None:
+    start = time.time()
+    cosmic_file = _resolve_cosmic_file()
+    print(f"COSMIC CGC file: {cosmic_file.name}")
+    df = _read_cosmic_df(cosmic_file)
+
+    sym_col = _first_col(df.columns, SYMBOL_COLS)
+    tier_col = _first_col(df.columns, TIER_COLS)
+    if sym_col is None or tier_col is None:
+        print(f"ABORT: COSMIC CGC missing symbol/tier columns "
+              f"(symbol->{sym_col}, tier->{tier_col}).")
+        print(f"Columns present: {list(df.columns)}")
         sys.exit(1)
-
-    df = pd.read_csv(COSMIC_FILE, dtype=str, usecols=REQUIRED_COLUMNS)
 
     # One row per gene; dedup on symbol, keeping the strongest (lowest) tier.
     gene_to_tier: dict[str, str] = {}
-    for symbol, tier in zip(df["Gene Symbol"], df["Tier"]):
+    for symbol, tier in zip(df[sym_col], df[tier_col]):
         if not isinstance(symbol, str) or not symbol.strip():
             continue
         symbol = symbol.strip()
