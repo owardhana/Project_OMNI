@@ -97,9 +97,18 @@ export default function EntityBrowser({ onMultiLoad, onClear }: Props) {
         aria-label="Open entity browser"
       >
         ENTITY BROWSER
+        {selected.size > 0 && <span className="eb-badge">{selected.size}</span>}
       </button>
     );
   }
+
+  // Pin selected entities to the top of the list (kept visible even when the
+  // current query/tab would otherwise exclude them).
+  const selectedKeys = new Set(selected.keys());
+  const displayItems = [
+    ...selected.values(),
+    ...items.filter((it) => !selectedKeys.has(keyOf(it))),
+  ];
 
   return (
     <aside className="entity-browser">
@@ -157,8 +166,11 @@ export default function EntityBrowser({ onMultiLoad, onClear }: Props) {
       )}
 
       <ul className="eb-list">
-        {items.map((it) => (
-          <li key={keyOf(it)} className="eb-row">
+        {displayItems.map((it) => (
+          <li
+            key={keyOf(it)}
+            className={`eb-row ${selected.has(keyOf(it)) ? 'selected' : ''}`}
+          >
             <label>
               <input
                 type="checkbox"
@@ -171,7 +183,7 @@ export default function EntityBrowser({ onMultiLoad, onClear }: Props) {
             </label>
           </li>
         ))}
-        {items.length === 0 && <li className="eb-empty muted">No results</li>}
+        {displayItems.length === 0 && <li className="eb-empty muted">No results</li>}
       </ul>
       {hasMore && (
         <button className="eb-more" onClick={loadMore}>
@@ -180,7 +192,11 @@ export default function EntityBrowser({ onMultiLoad, onClear }: Props) {
       )}
 
       <div className="eb-footer">
-        <button className="eb-load" disabled={selected.size === 0} onClick={loadSelected}>
+        <button
+          className={`eb-load ${selected.size > 0 ? 'has-selection' : ''}`}
+          disabled={selected.size === 0}
+          onClick={loadSelected}
+        >
           Load selected ({selected.size})
         </button>
         <button

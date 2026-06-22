@@ -4,6 +4,10 @@
      graph nodes. */
   --canvas: #1a1a18; /* 3D canvas (also set in GraphViewer3D) */
   --panel: #faf9f5; /* solid warm off-white panel */
+  /* Phase 8c: frosted-glass panel surface. Translucent off-white + blur keeps
+     the existing light theme + dark text readable (a dark glass would force a
+     full palette inversion — see PHASE3_PROGRESS.md). */
+  --panel-glass: rgba(250, 249, 245, 0.82);
   --panel-raised: #ffffff;
   --panel-hover: #f0eee7;
   --border: #e6e3db;
@@ -14,6 +18,7 @@
   --active: #2a2a26; /* graphite for active/selected states (flat) */
   --active-text: #faf9f5;
   --focus-ring: rgba(42, 42, 38, 0.18);
+  --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
 
   /* graph semantic colors (legend dots) */
   --gene: #4ade80;
@@ -21,7 +26,8 @@
   --transcript: #60a5fa;
   --danger: #c0392b;
 
-  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-weight: 450; /* slightly heavier base for legibility on the dark canvas */
   color: var(--text);
   background: var(--canvas);
 }
