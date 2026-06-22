@@ -1,0 +1,38 @@
+# OmniGraph — Neo4j 5 + APOC image for HPC Singularity (owardhan/project_omni:neo4j-5).
+#
+# Key differences from the local docker-compose neo4j:5 image:
+#   - APOC JAR baked in (no runtime download on compute node)
+#   - Custom ENTRYPOINT that writes data to $HOME/neo4j_data
+#     so Singularity's auto-bind of $HOME keeps data persistent between sessions.
+#
+# Build & push (from repo root):
+#   docker build -t owardhan/project_omni:neo4j-5 -f hpc/Dockerfile.neo4j-apoc .
+#   docker push owardhan/project_omni:neo4j-5
+#
+# On HPC OnDemand form — just fill in:
+#   URL:     docker://owardhan/project_omni:neo4j-5
+#   Command: (leave blank)
+
+FROM neo4j:5
+
+# APOC version must match the Neo4j minor version in this base image.
+# Confirmed: neo4j:5 → 5.26.27, so APOC 5.26.1 is correct.
+ARG APOC_VERSION=5.26.1
+
+RUN apt-get update -q && apt-get install -y -q wget \
+ && rm -rf /var/lib/apt/lists/* \
+ && wget -q -O /var/lib/neo4j/plugins/apoc-${APOC_VERSION}-core.jar \
+    "https://github.com/neo4j/apoc/releases/download/${APOC_VERSION}/apoc-${APOC_VERSION}-core.jar"
+
+ENV NEO4J_dbms_security_procedures_unrestricted=apoc.*
+ENV NEO4J_dbms_security_procedures_allowlist=apoc.*
+
+# Copy the HPC entrypoint and make it the default startup.
+# Singularity's `singularity run` will call this, which:
+#   1. Creates $HOME/neo4j_data (persists via Singularity's $HOME bind)
+#   2. Sets memory and auth env vars
+#   3. Hands off to the original Neo4j Docker entrypoint
+COPY hpc/neo4j_singularity_entrypoint.sh /neo4j_singularity_entrypoint.sh
+RUN chmod +x /neo4j_singularity_entrypoint.sh
+
+ENTRYPOINT ["/neo4j_singularity_entrypoint.sh"]
