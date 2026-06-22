@@ -17,20 +17,20 @@ export const DISEASE_LAYER_Z = 1200;
 // Five stacked omics/phenotype layers, stacked along the VERTICAL axis (world Y)
 // so genomics reads at the bottom and the phenotype layer at the top. Y-centres
 // are evenly spaced (300 apart) so the force layout reads as distinct stacked
-// planes. The metabolomics plane is tinted orange and the phenotype plane pink
-// (ADR-0009 palette); the lower three stay neutral so node colour carries the
-// meaning. `color` tints the (intentionally muted) layer plane; `accent` is the
-// layer's identity color — the dominant node hue — used for the toggle swatch so
-// the five layers read as distinct in the UI.
+// planes. `color` tints the (intentionally muted) layer plane — the metabolomics
+// plane is orange and the phenotype plane pink (ADR-0009 palette); the lower three
+// stay neutral so node colour carries the meaning. The layer toggle's swatches are
+// NOT defined here: they derive from LAYER_NODE_COLORS (below) so the toggle, the
+// legend, and the graph all read their colours from NODE_COLORS — one source.
 export const LAYERS: Record<
   LayerKey,
-  { y: number; color: string; accent: string; label: string }
+  { y: number; color: string; label: string }
 > = {
-  genomics: { y: -300, color: '#6b7280', accent: '#4ade80', label: 'Genomics' },
-  transcriptomics: { y: 0, color: '#6b7280', accent: '#60a5fa', label: 'Transcriptomics' },
-  proteomics: { y: 300, color: '#6b7280', accent: '#c084fc', label: 'Proteomics' },
-  metabolomics: { y: 600, color: '#fb923c', accent: '#fb923c', label: 'Metabolomics' },
-  phenotype: { y: 900, color: '#f472b6', accent: '#f472b6', label: 'Phenotype' },
+  genomics: { y: -300, color: '#6b7280', label: 'Genomics' },
+  transcriptomics: { y: 0, color: '#6b7280', label: 'Transcriptomics' },
+  proteomics: { y: 300, color: '#6b7280', label: 'Proteomics' },
+  metabolomics: { y: 600, color: '#fb923c', label: 'Metabolomics' },
+  phenotype: { y: 900, color: '#f472b6', label: 'Phenotype' },
 };
 
 export const GENE_Y = LAYERS.genomics.y;
@@ -49,6 +49,19 @@ export const NODE_COLORS = {
   variant: '#2dd4bf', // teal — variant (in the genomics plane)
   metabolite: '#fb923c', // orange — metabolite (metabolomics plane, ADR-0009)
   disease: '#f472b6', // hot pink — disease (phenotype plane)
+};
+
+// The node-type colours present in each layer, derived from NODE_COLORS so the
+// layer toggle swatches are EXACTLY the graph node colours (single source of
+// truth — fixes the toggle/legend/graph colour drift). Two layers hold more than
+// one node type, so they carry two swatches: genomics = gene + variant,
+// proteomics = (non-TF) protein + TF protein.
+export const LAYER_NODE_COLORS: Record<LayerKey, string[]> = {
+  genomics: [NODE_COLORS.gene, NODE_COLORS.variant],
+  transcriptomics: [NODE_COLORS.transcript],
+  proteomics: [NODE_COLORS.protein, NODE_COLORS.protein_tf],
+  metabolomics: [NODE_COLORS.metabolite],
+  phenotype: [NODE_COLORS.disease],
 };
 
 export const EDGE_COLORS = {

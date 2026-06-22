@@ -182,6 +182,11 @@
   accent-color: var(--active);
   cursor: pointer;
 }
+.layer-swatch-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
 .layer-swatch {
   width: 10px;
   height: 10px;
