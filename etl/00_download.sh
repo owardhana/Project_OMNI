@@ -52,22 +52,24 @@ SOURCES=(
   # the phenotype's `_primary_disease` joins to the curated crosswalk (see below).
   "tcga_RSEM_gene_fpkm.gz|https://toil-xena-hub.s3.us-east-1.amazonaws.com/download/tcga_RSEM_gene_fpkm.gz"
   "TCGA_phenotype_denseDataOnlyDownload.tsv.gz|https://tcga-pancan-atlas-hub.s3.us-east-1.amazonaws.com/download/TCGA_phenotype_denseDataOnlyDownload.tsv.gz"
-  # COSMIC Cancer Gene Census (v99). NOT CONSUMABLE as-is: the Sanger endpoint returns
-  # an HTML *login page*, not a CSV (12_cosmic.py aborts cleanly via its column guard).
-  # COSMIC requires a free account; fetch cancer_gene_census.csv manually into data/raw/
-  # (overwriting the login-page file) to enable Phase 2.
+  # COSMIC Cancer Gene Census. Requires a free Sanger account (the unauthenticated
+  # endpoint returns an HTML login page), so download it MANUALLY from the COSMIC site
+  # into data/raw/. 12_cosmic.py auto-detects whichever form lands: the v104 tar
+  # (Cosmic_CancerGeneCensus_Tsv_*.tar -> *.tsv.gz with GENE_SYMBOL/TIER), a plain
+  # *.tsv.gz, or a legacy cosmic_cancer_gene_census.csv. URL kept as source documentation.
   "cosmic_cancer_gene_census.csv|https://cancer.sanger.ac.uk/cosmic/file_download/GRCh38/cosmic/v99/cancer_gene_census.csv"
   # TCGA cancer type -> EFO mapping (Open Targets archive). Kept as the documented
   # upstream provenance of etl/reference/tcga_disease_to_efo.tsv; 13_tcga.py reads the
   # curated graph-verified crosswalk, not this file directly (see crosswalk header).
   "cancer2EFO_mappings.tsv|https://raw.githubusercontent.com/opentargets-archive/evidence_datasource_parsers/master/resources/cancer2EFO_mappings.tsv"
-  # Recon3D. NOTE: the vmh.life 3D.01 zip ships MATLAB .mat files, NOT SBML XML, so
-  # 14_metabolomics.py (libsbml) cannot read it. Metabolomics (Phase 6) is also gated
-  # on the full proteome (Protein=117 -> ~0 CATALYSES) regardless, so this is HELD.
-  # For SBML later, fetch Recon3D as SBML (e.g. BiGG) and save as data/raw/Recon3D.xml.
+  # Recon3D — CONSUMED by 14_metabolomics.py. The vmh.life 3D.01 zip ships a MATLAB
+  # COBRA model (.mat), which 14_metabolomics.py reads via scipy.io.loadmat (NOT SBML).
+  # NOTE: CATALYSES (Protein->Metabolite) is gated on the proteome already in the graph
+  # — with a partial proteome (Protein=117) the metabolite layer loads but is sparsely
+  # connected until the full proteome is loaded (05_proteins/06_uniprot_enrich).
   "Recon3D_301.zip|https://www.vmh.life/files/reconstructions/Recon/3D.01/Recon3D_301.zip"
-  # HMDB metabolite identifiers (zip; ~6.4GB unzipped). Optional — Recon3D SBML carries
-  # hmdb/chebi ids directly; only needed if cross-referencing names. Phase 6 held (above).
+  # HMDB metabolite identifiers (zip; ~6.4GB unzipped). Used by 14_metabolomics.py to
+  # fill canonical name/inchikey for HMDB-keyed metabolites (streamed, never extracted).
   "hmdb_metabolites.zip|https://hmdb.ca/system/downloads/current/hmdb_metabolites.zip"
 )
 

@@ -4,4 +4,4 @@ numpy
 httpx
 python-dotenv
 pyreadr
-python-libsbml   # Phase 3 — Recon3D SBML parsing (14_metabolomics.py, ADR-0009)
+scipy            # Phase 3 — Recon3D COBRA .mat parsing (14_metabolomics.py, ADR-0009)

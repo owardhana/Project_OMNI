@@ -1,25 +1,37 @@
 """ETL 14 — Metabolomics: Metabolite nodes + CATALYSES edges from Recon3D (ADR-0009).
 
 Topology from a bulk file (06_data_vision.md Pattern 1 / 09_data_catalog.md rows
-13-14). Parses the Recon3D human metabolic reconstruction (SBML, FBC package) to
-extract:
-  - (:Metabolite {hmdb_id|chebi_id, name, formula, charge})   from <species>
+13-14). Parses the Recon3D human metabolic reconstruction COBRA model
+(``Recon3D_301.mat``, read with scipy.io.loadmat) to extract:
+  - (:Metabolite {hmdb_id|chebi_id, name, formula, charge, inchikey})  from `mets`
   - (:Protein {uniprot_id})-[:CATALYSES {role, reaction_id}]->(:Metabolite)
-        role = "substrate" (reactant) | "product"
+        role = "substrate" (reactant, S<0) | "product" (S>0)
 
-Gene -> Protein mapping uses the HGNC/UniProt topology already in the graph
-(ENCODES / PRODUCES+TRANSLATES_TO), so we never create proteins here — only MATCH
-existing ones (08_phase3_build_prompt.md: "Map Ensembl gene IDs -> UniProt via the
-existing mappings in Neo4j"). Proteins absent from the graph are skipped.
+The distributed Recon3D archive ships MATLAB ``.mat`` (a COBRA struct), NOT SBML, so
+this reads the model directly: `mets`/`metNames`/`metFormulas`/`metHMDBID`/
+`metCHEBIID`/`metCharges`/`metInChIString`, the `rxnGeneMat` (reaction×gene) and the
+`S` stoichiometric matrix (metabolite×reaction; sign gives reactant/product).
 
-Metabolite key: hmdb_id (primary) with chebi_id fallback (ADR-0009); a species
-with neither resolvable identifier is discarded.
+Gene mapping: Recon3D genes are Entrez ids (e.g. "8639.1"); graph Gene nodes carry
+no Entrez id, so we crosswalk Entrez→Ensembl via the HGNC file, then Ensembl→UniProt
+via the existing graph topology (ENCODES / PRODUCES+TRANSLATES_TO). Proteins absent
+from the graph are skipped — never created here.
 
-METABOLOMICS_MIN_REACTIONS env var (default 1) drops metabolites appearing in
-fewer than N reactions after load.
+⚠ The CATALYSES edges depend on the proteome already in the graph. If Protein is
+small (the MVP loaded only ~117), CATALYSES will be SPARSE and the metabolite layer
+will be largely DISCONNECTED — the metabolite NODES still load (they do not depend on
+CATALYSES), but signal-decay traversal cannot flow into them until the full proteome
+is loaded (05_proteins/06_uniprot_enrich). The run prints the actual CATALYSES count.
 
-Requires python-libsbml (etl/requirements.txt) — the FBC package carries the gene
-associations, charge, and chemical formula that plain XML parsing would miss.
+HMDB enrichment (optional): if ``hmdb_metabolites.zip`` is present, its XML is streamed
+(iterparse) to fill canonical name / inchikey for the HMDB-keyed metabolites. Recon3D
+ids are old-form (HMDB00015); HMDB uses HMDB0000015 + secondary_accessions, so both
+are normalised to the integer id before joining.
+
+METABOLOMICS_MIN_REACTIONS env var (default 1) drops metabolites participating in
+fewer than N reactions (counted from S, intrinsic to the model — not CATALYSES).
+
+Requires scipy (etl/requirements.txt).
 
     etl/.venv/bin/python etl/14_metabolomics.py
 """
@@ -28,75 +40,113 @@ import os
 import re
 import sys
 import time
+import io
+import zipfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
+
+import numpy as np
+import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from utils.neo4j_client import close_driver, get_session  # noqa: E402
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
-RECON_FILE = _PROJECT_ROOT / "data" / "raw" / "Recon3D.xml"
+RAW_DIR = _PROJECT_ROOT / "data" / "raw"
+RECON_CANDIDATES = ["Recon3D*.zip", "Recon3D*.mat"]
+HMDB_ZIP = RAW_DIR / "hmdb_metabolites.zip"
+HGNC_FILE = RAW_DIR / "hgnc_complete_set.txt"
 NODE_BATCH = 5000
 EDGE_BATCH = 2000
 GENE_LOOKUP_BATCH = 500
 SOURCE_DB = "Recon3D"
-SOURCE_VERSION = "3.04"
+SOURCE_VERSION = "3.01_mat"
 
-_HMDB_RE = re.compile(r"(HMDB\d{5,})", re.IGNORECASE)
-_CHEBI_RE = re.compile(r"(CHEBI:\d+)", re.IGNORECASE)
-_ENSG_RE = re.compile(r"(ENSG\d{11})")
-
-
-def _import_libsbml():
-    try:
-        import libsbml  # noqa: WPS433
-    except ImportError as exc:  # pragma: no cover - environment guard
-        raise ImportError(
-            "python-libsbml is required for 14_metabolomics.py. "
-            "Install it: etl/.venv/bin/pip install python-libsbml"
-        ) from exc
-    return libsbml
+_HMDB_NUM_RE = re.compile(r"HMDB0*(\d+)", re.IGNORECASE)
+_CHEBI_RE = re.compile(r"(\d+)")
+_COMPARTMENT_RE = re.compile(r"\[[a-z]\]$")
+_HMDB_NS = "{http://www.hmdb.ca}"
 
 
-def _resource_uris(sbase) -> list[str]:
-    """All MIRIAM resource URIs annotated on an SBML element (via CV terms)."""
-    uris: list[str] = []
-    for i in range(sbase.getNumCVTerms()):
-        cv = sbase.getCVTerm(i)
-        for j in range(cv.getNumResources()):
-            uris.append(cv.getResourceURI(j))
-    return uris
+# --- value normalisation -----------------------------------------------------
+
+def _cell_str(x) -> str:
+    """A Recon3D cell value -> stripped str ('' when empty)."""
+    if isinstance(x, np.ndarray):
+        if x.size == 0:
+            return ""
+        x = x.item() if x.size == 1 else x.flat[0]
+    if x is None:
+        return ""
+    s = str(x).strip()
+    return "" if s.lower() == "nan" else s
 
 
-def _parse_ids(sbase) -> tuple[str | None, str | None]:
-    """(hmdb_id, chebi_id) from a species' MIRIAM annotation, else (None, None)."""
-    blob = " ".join(_resource_uris(sbase))
-    hmdb = _HMDB_RE.search(blob)
-    chebi = _CHEBI_RE.search(blob)
-    hmdb_id = hmdb.group(1).upper() if hmdb else None
-    # Normalise to the canonical "CHEBI:<n>" form regardless of source casing.
-    chebi_id = "CHEBI:" + chebi.group(1).split(":")[-1] if chebi else None
-    return hmdb_id, chebi_id
+def _norm_hmdb(raw: str) -> str | None:
+    m = _HMDB_NUM_RE.search(raw or "")
+    return f"HMDB{int(m.group(1)):07d}" if m else None
 
 
-def _collect_gene_products(association, libsbml) -> list[str]:
-    """Recursively collect all geneProduct ids referenced by an association tree
-    (GeneProductRef / FbcAnd / FbcOr). Returns geneProduct ids (FBC ids)."""
-    out: list[str] = []
-    if association is None:
-        return out
-    if isinstance(association, libsbml.GeneProductRef):
-        out.append(association.getGeneProduct())
-    elif isinstance(association, (libsbml.FbcAnd, libsbml.FbcOr)):
-        for k in range(association.getNumAssociations()):
-            out.extend(_collect_gene_products(association.getAssociation(k), libsbml))
+def _norm_chebi(raw: str) -> str | None:
+    if not raw:
+        return None
+    m = _CHEBI_RE.search(raw)
+    return f"CHEBI:{m.group(1)}" if m else None
+
+
+def _hmdb_int(hmdb_id: str) -> int | None:
+    m = _HMDB_NUM_RE.search(hmdb_id or "")
+    return int(m.group(1)) if m else None
+
+
+# --- inputs ------------------------------------------------------------------
+
+def _resolve_recon() -> Path:
+    for pat in RECON_CANDIDATES:
+        hits = sorted(RAW_DIR.glob(pat))
+        if hits:
+            return hits[-1]
+    raise FileNotFoundError(f"No Recon3D file in {RAW_DIR} (looked for {RECON_CANDIDATES}).")
+
+
+def _load_recon_model(path: Path):
+    import scipy.io as sio  # local import: scipy is only needed here
+    if path.suffix == ".zip":
+        with zipfile.ZipFile(path) as zf:
+            members = [n for n in zf.namelist() if n.lower().endswith(".mat")]
+            # prefer the full model (Recon3D_301.mat) over the reduced Model file
+            members.sort(key=lambda n: ("model" in n.lower(), len(n)))
+            if not members:
+                print(f"ABORT: no .mat inside {path.name}: {zf.namelist()}")
+                sys.exit(1)
+            buf = io.BytesIO(zf.read(members[0]))
+            print(f"Recon3D: reading {members[0]} from {path.name}")
+            mat = sio.loadmat(buf, squeeze_me=True, struct_as_record=False)
+    else:
+        print(f"Recon3D: reading {path.name}")
+        mat = sio.loadmat(str(path), squeeze_me=True, struct_as_record=False)
+    var = next(k for k in mat if not k.startswith("__"))
+    return mat[var]
+
+
+def _load_entrez_to_ensembl() -> dict[str, str]:
+    """{entrez_id (str) -> ensembl_gene_id} from the HGNC complete set."""
+    if not HGNC_FILE.exists():
+        print(f"ABORT: {HGNC_FILE} missing (needed for Entrez->Ensembl crosswalk).")
+        sys.exit(1)
+    df = pd.read_csv(HGNC_FILE, sep="\t", dtype=str, low_memory=False,
+                     usecols=lambda c: c in ("entrez_id", "ensembl_gene_id"))
+    out: dict[str, str] = {}
+    for ent, ens in zip(df.get("entrez_id", []), df.get("ensembl_gene_id", [])):
+        if isinstance(ent, str) and isinstance(ens, str) and ent.strip() and ens.strip():
+            out[ent.split(".")[0].strip()] = ens.strip()
     return out
 
 
-def _map_genes_to_uniprot(ensembl_ids: set[str]) -> dict[str, str]:
-    """{ensembl_id -> uniprot_id} via existing graph topology, batched.
+# --- graph helpers (reused) --------------------------------------------------
 
-    One UniProt per gene (first match) — a per-eid CALL subquery so the LIMIT is
-    scoped to each gene, not the whole batch."""
+def _map_genes_to_uniprot(ensembl_ids: set[str]) -> dict[str, str]:
+    """{ensembl_id -> uniprot_id} via existing graph topology, batched (one per gene)."""
     query = """
     UNWIND $eids AS eid
     CALL {
@@ -116,144 +166,59 @@ def _map_genes_to_uniprot(ensembl_ids: set[str]) -> dict[str, str]:
     return mapping
 
 
-def main() -> None:
-    start = time.time()
-    if not RECON_FILE.exists():
-        raise FileNotFoundError(f"{RECON_FILE} not found. Run etl/00_download.sh first.")
-    libsbml = _import_libsbml()
+# --- HMDB streaming enrichment ----------------------------------------------
 
-    doc = libsbml.readSBMLFromFile(str(RECON_FILE))
-    model = doc.getModel()
-    if model is None:
-        print("ABORT: Recon3D SBML has no <model> element.")
-        sys.exit(1)
-    fbc_model = model.getPlugin("fbc")
-
-    # --- gene products: FBC id -> label (Ensembl/Entrez) ---
-    gp_to_ensembl: dict[str, str] = {}
-    if fbc_model is not None:
-        for gp in fbc_model.getListOfGeneProducts():
-            label = gp.getLabel() or gp.getId()
-            m = _ENSG_RE.search(label or "")
-            if m:
-                gp_to_ensembl[gp.getId()] = m.group(1)
-
-    # --- species -> metabolite props ---
-    species_meta: dict[str, dict] = {}  # species id -> {key, props}
-    for sp in model.getListOfSpecies():
-        hmdb_id, chebi_id = _parse_ids(sp)
-        if not hmdb_id and not chebi_id:
-            continue
-        spfbc = sp.getPlugin("fbc")
-        formula = spfbc.getChemicalFormula() if spfbc else None
-        charge = spfbc.getCharge() if (spfbc and spfbc.isSetCharge()) else None
-        key = hmdb_id if hmdb_id else chebi_id
-        species_meta[sp.getId()] = {
-            "key_field": "hmdb_id" if hmdb_id else "chebi_id",
-            "key": key,
-            "hmdb_id": hmdb_id,
-            "chebi_id": chebi_id,
-            "name": sp.getName() or key,
-            "formula": formula or None,
-            "charge": int(charge) if charge is not None else None,
-        }
-    print(f"Species with HMDB/ChEBI id: {len(species_meta)}")
-
-    # --- reactions -> (gene set, reactants, products) ---
-    all_ensembl: set[str] = set()
-    reactions: list[dict] = []
-    unparsed = 0
-    for rxn in model.getListOfReactions():
-        rfbc = rxn.getPlugin("fbc")
-        gpa = rfbc.getGeneProductAssociation() if rfbc else None
-        gp_ids = _collect_gene_products(
-            gpa.getAssociation() if gpa else None, libsbml
-        ) if gpa else []
-        ensembl = {gp_to_ensembl[g] for g in gp_ids if g in gp_to_ensembl}
-        if not ensembl:
-            unparsed += 1
-            continue
-        reactants = [sr.getSpecies() for sr in rxn.getListOfReactants()]
-        products = [sr.getSpecies() for sr in rxn.getListOfProducts()]
-        all_ensembl.update(ensembl)
-        reactions.append({
-            "rxn_id": rxn.getId(),
-            "ensembl": ensembl,
-            "reactants": reactants,
-            "products": products,
-        })
-    print(f"Reactions with a resolvable gene association: {len(reactions)} "
-          f"(unparsed/no-gene: {unparsed})")
-
-    # --- map genes -> uniprot via graph ---
-    gene_to_uniprot = _map_genes_to_uniprot(all_ensembl)
-    print(f"Genes mapped to a graph Protein: {len(gene_to_uniprot)} / {len(all_ensembl)}")
-
-    # --- build metabolite nodes + CATALYSES edges ---
-    used_species: set[str] = set()
-    edges: dict[tuple[str, str, str], dict] = {}  # (uniprot, met_key, role) -> edge
-    reaction_count: dict[str, int] = {}
-    for rxn in reactions:
-        uniprots = {gene_to_uniprot[e] for e in rxn["ensembl"] if e in gene_to_uniprot}
-        if not uniprots:
-            continue
-        for role, species_list in (("substrate", rxn["reactants"]), ("product", rxn["products"])):
-            for sid in species_list:
-                meta = species_meta.get(sid)
-                if not meta:
+def _stream_hmdb(needed_ids: set[int]) -> dict[int, dict]:
+    """{int hmdb id -> {name, formula, inchikey}} for the needed ids only, by
+    streaming the (multi-GB) HMDB XML with iterparse + root.clear() (bounded mem)."""
+    if not HMDB_ZIP.exists() or not needed_ids:
+        return {}
+    out: dict[int, dict] = {}
+    with zipfile.ZipFile(HMDB_ZIP) as zf:
+        xml_name = next((n for n in zf.namelist() if n.lower().endswith(".xml")), None)
+        if xml_name is None:
+            return {}
+        with zf.open(xml_name) as fh:
+            context = ET.iterparse(fh, events=("start", "end"))
+            _, root = next(context)
+            for event, elem in context:
+                if event != "end" or elem.tag != _HMDB_NS + "metabolite":
                     continue
-                used_species.add(sid)
-                reaction_count[meta["key"]] = reaction_count.get(meta["key"], 0) + 1
-                for uni in uniprots:
-                    edges[(uni, meta["key"], role)] = {
-                        "uniprot_id": uni,
-                        "met_key": meta["key"],
-                        "key_field": meta["key_field"],
-                        "role": role,
-                        "rxn_id": rxn["rxn_id"],
-                    }
-
-    metabolite_rows = [
-        species_meta[sid] for sid in used_species
-    ]
-    # dedup metabolites by canonical key
-    by_key: dict[str, dict] = {}
-    for m in metabolite_rows:
-        by_key.setdefault(m["key"], m)
-    metabolite_rows = list(by_key.values())
-    edge_rows = list(edges.values())
-    print(f"Metabolite nodes: {len(metabolite_rows)}; CATALYSES edges: {len(edge_rows)}")
-
-    with get_session() as session:
-        _write_metabolites(session, metabolite_rows)
-        _write_catalyses(session, edge_rows)
-        deleted = _apply_min_reactions(session)
-        session.run(
-            "MERGE (ds:DataSource {name: $name}) "
-            "SET ds.loaded_at = datetime(), ds.source_db = $source_db, "
-            "    ds.source_version = $source_version, "
-            "    ds.metabolites = $mets, ds.catalyses_edges = $edges, "
-            "    ds.pruned_low_reaction = $deleted",
-            name="14_metabolomics", source_db=SOURCE_DB, source_version=SOURCE_VERSION,
-            mets=len(metabolite_rows), edges=len(edge_rows), deleted=deleted,
-        ).consume()
-
-    elapsed = time.time() - start
-    print(f"Metabolite nodes merged: {len(metabolite_rows)}")
-    print(f"CATALYSES edges merged: {len(edge_rows)}")
-    print(f"Time elapsed: {elapsed:.1f}s")
-    close_driver()
+                ids: set[int] = set()
+                a = elem.find(_HMDB_NS + "accession")
+                if a is not None and a.text:
+                    n = _hmdb_int(a.text)
+                    if n is not None:
+                        ids.add(n)
+                sec = elem.find(_HMDB_NS + "secondary_accessions")
+                if sec is not None:
+                    for x in sec.findall(_HMDB_NS + "accession"):
+                        n = _hmdb_int(x.text or "")
+                        if n is not None:
+                            ids.add(n)
+                hit = ids & needed_ids
+                if hit:
+                    def _txt(tag):
+                        e = elem.find(_HMDB_NS + tag)
+                        return e.text.strip() if e is not None and e.text else None
+                    rec = {"name": _txt("name"), "formula": _txt("chemical_formula"),
+                           "inchikey": _txt("inchikey")}
+                    for n in hit:
+                        out[n] = rec
+                elem.clear()
+                root.clear()
+    return out
 
 
-# Two explicit MERGE queries — metabolites are keyed on hmdb_id (primary) or, when
-# HMDB is absent, on chebi_id (fallback). The MERGE key must be a fixed property,
-# so the two key fields need two statements; the crosslink id is SET either way.
+# --- writers -----------------------------------------------------------------
+
 _MERGE_BY_HMDB = """
 UNWIND $rows AS m
 MERGE (met:Metabolite {hmdb_id: m.hmdb_id})
   ON CREATE SET met.created_at = timestamp()
 SET met.chebi_id = m.chebi_id, met.name = m.name, met.formula = m.formula,
-    met.charge = m.charge, met.node_type = 'metabolite', met.layer_z = 900,
+    met.charge = m.charge, met.inchikey = m.inchikey,
+    met.node_type = 'metabolite', met.layer_z = 900,
     met.source_db = $source_db, met.source_version = $source_version
 """
 _MERGE_BY_CHEBI = """
@@ -261,7 +226,8 @@ UNWIND $rows AS m
 MERGE (met:Metabolite {chebi_id: m.chebi_id})
   ON CREATE SET met.created_at = timestamp()
 SET met.hmdb_id = m.hmdb_id, met.name = m.name, met.formula = m.formula,
-    met.charge = m.charge, met.node_type = 'metabolite', met.layer_z = 900,
+    met.charge = m.charge, met.inchikey = m.inchikey,
+    met.node_type = 'metabolite', met.layer_z = 900,
     met.source_db = $source_db, met.source_version = $source_version
 """
 
@@ -290,23 +256,174 @@ def _write_catalyses(session, rows: list[dict]) -> None:
                     source_db=SOURCE_DB, source_version=SOURCE_VERSION).consume()
 
 
-def _apply_min_reactions(session) -> int:
-    """Delete metabolites appearing in fewer than METABOLOMICS_MIN_REACTIONS
-    reactions (distinct reaction_id on incident CATALYSES edges). Default 1 keeps
-    all loaded metabolites."""
+def _apply_min_reactions(session, met_reaction_count: dict[str, int]) -> int:
+    """Delete loaded metabolites whose intrinsic S-matrix reaction participation is
+    below METABOLOMICS_MIN_REACTIONS (default 1 keeps all)."""
     min_reactions = int(os.getenv("METABOLOMICS_MIN_REACTIONS", "1"))
     if min_reactions <= 1:
         return 0
+    low = [k for k, n in met_reaction_count.items() if n < min_reactions]
+    if not low:
+        return 0
     rec = session.run(
-        "MATCH (m:Metabolite) "
-        "OPTIONAL MATCH (m)<-[r:CATALYSES]-() "
-        "WITH m, count(DISTINCT r.reaction_id) AS rxns "
-        "WHERE rxns < $min "
-        "DETACH DELETE m "
-        "RETURN count(m) AS deleted",
-        min=min_reactions,
+        "UNWIND $keys AS k MATCH (m:Metabolite) "
+        "WHERE m.hmdb_id = k OR m.chebi_id = k DETACH DELETE m RETURN count(m) AS c",
+        keys=low,
     ).single()
-    return rec["deleted"] if rec else 0
+    return rec["c"] if rec else 0
+
+
+def main() -> None:
+    start = time.time()
+    recon = _resolve_recon()
+    model = _load_recon_model(recon)
+
+    mets = [_cell_str(x) for x in model.mets]
+    met_names = [_cell_str(x) for x in model.metNames]
+    met_formulas = [_cell_str(x) for x in model.metFormulas]
+    met_hmdb = [_cell_str(x) for x in model.metHMDBID]
+    met_chebi = [_cell_str(x) for x in model.metCHEBIID]
+    charges = np.asarray(model.metCharges).ravel() if hasattr(model, "metCharges") else None
+    genes = [_cell_str(x) for x in model.genes]
+    n_met, n_gene = len(mets), len(genes)
+    print(f"Recon3D: {n_met} mets, {len(model.rxns)} rxns, {n_gene} genes")
+
+    # S (mets x rxns) and rxnGeneMat (rxns x genes). loadmat returns these as either
+    # scipy.sparse or dense ndarrays depending on the model; coerce uniformly.
+    from scipy import sparse
+    S = sparse.csc_matrix(model.S)
+    rxn_gene = sparse.csr_matrix(model.rxnGeneMat)
+
+    # --- metabolite records, deduped per chemical (base id, no compartment) ---
+    by_base: dict[str, dict] = {}
+    met_idx_to_base: dict[int, str] = {}
+    for i, mid in enumerate(mets):
+        hmdb = _norm_hmdb(met_hmdb[i])
+        chebi = _norm_chebi(met_chebi[i])
+        if not hmdb and not chebi:
+            continue
+        base = _COMPARTMENT_RE.sub("", mid)
+        met_idx_to_base[i] = base
+        charge = int(charges[i]) if charges is not None and i < len(charges) and not np.isnan(charges[i]) else None
+        rec = by_base.get(base)
+        if rec is None:
+            by_base[base] = {
+                "hmdb_id": hmdb, "chebi_id": chebi,
+                "name": met_names[i] or None, "formula": met_formulas[i] or None,
+                "charge": charge, "inchikey": None, "indices": [i],
+            }
+        else:
+            rec["hmdb_id"] = rec["hmdb_id"] or hmdb       # prefer existing; fill gaps
+            rec["chebi_id"] = rec["chebi_id"] or chebi
+            rec["name"] = rec["name"] or (met_names[i] or None)
+            rec["formula"] = rec["formula"] or (met_formulas[i] or None)
+            rec["indices"].append(i)
+    print(f"Metabolites with HMDB/ChEBI id (deduped per chemical): {len(by_base)}")
+
+    # intrinsic reaction participation per chemical (distinct rxns over its indices,
+    # via S row slices — S is CSC metsxrxns, so use CSR for fast row access).
+    S_csr = S.tocsr()
+    base_rxn_count: dict[str, int] = {}
+    for base, rec in by_base.items():
+        rxns: set[int] = set()
+        for i in rec["indices"]:
+            rxns.update(S_csr.indices[S_csr.indptr[i]:S_csr.indptr[i + 1]])
+        base_rxn_count[base] = len(rxns)
+
+    # --- HMDB enrichment (fill canonical name / inchikey for hmdb-keyed mets) ---
+    needed = {_hmdb_int(r["hmdb_id"]) for r in by_base.values() if r["hmdb_id"]}
+    needed.discard(None)
+    print(f"HMDB ids to enrich: {len(needed)}")
+    hmdb_data = _stream_hmdb(needed)  # may be {} if zip absent
+    enriched = 0
+    for rec in by_base.values():
+        n = _hmdb_int(rec["hmdb_id"]) if rec["hmdb_id"] else None
+        info = hmdb_data.get(n) if n is not None else None
+        if info:
+            enriched += 1
+            if info.get("name"):
+                rec["name"] = info["name"]            # HMDB canonical name wins
+            rec["inchikey"] = info.get("inchikey")
+            rec["formula"] = rec["formula"] or info.get("formula")
+    print(f"HMDB matches applied: {enriched} / {len(needed)} (0 if HMDB zip absent)")
+
+    # finalise metabolite rows + per-key reaction count
+    metabolite_rows: list[dict] = []
+    key_rxn_count: dict[str, int] = {}
+    for base, rec in by_base.items():
+        key_field = "hmdb_id" if rec["hmdb_id"] else "chebi_id"
+        key = rec["hmdb_id"] if rec["hmdb_id"] else rec["chebi_id"]
+        metabolite_rows.append({
+            "key_field": key_field, "key": key,
+            "hmdb_id": rec["hmdb_id"], "chebi_id": rec["chebi_id"],
+            "name": rec["name"] or key, "formula": rec["formula"],
+            "charge": rec["charge"], "inchikey": rec["inchikey"],
+        })
+        key_rxn_count[key] = base_rxn_count[base]
+
+    # --- Entrez->Ensembl->UniProt mapping for CATALYSES ---
+    entrez_to_ensembl = _load_entrez_to_ensembl()
+    gene_entrez = [g.split(".")[0] for g in genes]  # column index -> entrez id
+    all_ensembl = {entrez_to_ensembl[e] for e in gene_entrez
+                   if e and e in entrez_to_ensembl}
+    ensembl_to_uniprot = _map_genes_to_uniprot(all_ensembl)
+    print(f"Recon3D genes -> Ensembl: {len(all_ensembl)} / {len(set(gene_entrez))}; "
+          f"-> graph Protein: {len(ensembl_to_uniprot)}")
+
+    # --- CATALYSES edges (Protein -> Metabolite) ---
+    rxns = [_cell_str(x) for x in model.rxns]
+    edges: dict[tuple, dict] = {}
+    for j in range(len(rxns)):
+        gcols = rxn_gene.indices[rxn_gene.indptr[j]:rxn_gene.indptr[j + 1]]
+        uniprots = set()
+        for col in gcols:
+            ens = entrez_to_ensembl.get(gene_entrez[col])
+            uni = ensembl_to_uniprot.get(ens) if ens else None
+            if uni:
+                uniprots.add(uni)
+        if not uniprots:
+            continue
+        col_start, col_end = S.indptr[j], S.indptr[j + 1]
+        for row, val in zip(S.indices[col_start:col_end], S.data[col_start:col_end]):
+            base = met_idx_to_base.get(row)
+            if base is None:
+                continue
+            rec = by_base[base]
+            key = rec["hmdb_id"] or rec["chebi_id"]
+            key_field = "hmdb_id" if rec["hmdb_id"] else "chebi_id"
+            role = "substrate" if val < 0 else "product"
+            for uni in uniprots:
+                edges[(uni, key, role)] = {
+                    "uniprot_id": uni, "met_key": key, "key_field": key_field,
+                    "role": role, "rxn_id": rxns[j],
+                }
+    edge_rows = list(edges.values())
+    print(f"Metabolite nodes: {len(metabolite_rows)}; CATALYSES edges: {len(edge_rows)}")
+
+    with get_session() as session:
+        _write_metabolites(session, metabolite_rows)
+        _write_catalyses(session, edge_rows)
+        deleted = _apply_min_reactions(session, key_rxn_count)
+        session.run(
+            "MERGE (ds:DataSource {name: $name}) "
+            "SET ds.loaded_at = datetime(), ds.source_db = $source_db, "
+            "    ds.source_version = $source_version, "
+            "    ds.metabolites = $mets, ds.catalyses_edges = $edges, "
+            "    ds.hmdb_enriched = $enriched, ds.pruned_low_reaction = $deleted",
+            name="14_metabolomics", source_db=SOURCE_DB, source_version=SOURCE_VERSION,
+            mets=len(metabolite_rows), edges=len(edge_rows), enriched=enriched,
+            deleted=deleted,
+        ).consume()
+
+    elapsed = time.time() - start
+    print(f"Metabolite nodes merged: {len(metabolite_rows)} (pruned {deleted})")
+    print(f"CATALYSES edges merged: {len(edge_rows)}")
+    if not edge_rows:
+        print("⚠ 0 CATALYSES edges — the metabolite layer is DISCONNECTED. This is "
+              "expected while the graph holds only a partial proteome (load the full "
+              "proteome via 05_proteins/06_uniprot_enrich to connect it).")
+    print(f"Time elapsed: {elapsed:.1f}s")
+    close_driver()
 
 
 if __name__ == "__main__":

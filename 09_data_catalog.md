@@ -349,17 +349,24 @@ is NOT read directly — its EFO ids covered only 4/33 of this graph's Disease s
 
 | Field | Source | Column | Notes |
 |-------|--------|--------|-------|
-| `role` | Recon3D SBML | Reactant/product position in `<listOfReactants>` vs `<listOfProducts>` | `"substrate"` or `"product"` |
-| `reaction_id` | Recon3D SBML | `<reaction id=...>` attribute | Recon3D internal reaction ID (e.g. `RE_PYRt2m`) |
+| `role` | Recon3D `.mat` `S` matrix | sign of the stoichiometric coefficient (S<0 reactant, S>0 product) | `"substrate"` or `"product"` |
+| `reaction_id` | Recon3D `.mat` `rxns` | reaction id | e.g. `10FTHF5GLUtl` |
 | `source_db` | `14_metabolomics.py` | n/a | `"Recon3D"` |
-| `source_version` | `14_metabolomics.py` | n/a | `"3.04"` |
+| `source_version` | `14_metabolomics.py` | n/a | `"3.01_mat"` |
 
-**Conductance** = 0.7 (fixed; enzymatic link). Not dense-capped (most proteins
-catalyse 1–5 reactions — no hub-protein issue here).
+**Source format:** the distributed Recon3D archive ships a MATLAB COBRA model
+(`Recon3D_301.mat`), NOT SBML. `14_metabolomics.py` reads it with `scipy.io.loadmat`:
+metabolites from `mets`/`metHMDBID`/`metCHEBIID`/`metNames`/`metFormulas`/`metCharges`/
+`metInChIString`, reaction→gene from `rxnGeneMat`, reaction→metabolite (+role) from `S`.
+HMDB (`hmdb_metabolites.zip`, streamed) fills canonical name/inchikey for HMDB-keyed mets.
 
-Gene → Protein mapping used: `MATCH (g:Gene {ensembl_id:$eid})-[:ENCODES|PRODUCES*..2]->(p:Protein)`.
-Boolean gene associations (`ENSG1 and ENSG2 or ENSG3`) are split on OR; first
-valid Ensembl ID per OR-group used. Complex associations are logged.
+**Conductance** = 0.7 (fixed; enzymatic link). Not dense-capped.
+
+Gene → Protein mapping: Recon3D genes are **Entrez ids** (e.g. `8639.1`), crosswalked
+to Ensembl via the HGNC file, then `MATCH (g:Gene {ensembl_id:$eid})-[:ENCODES|PRODUCES|
+TRANSLATES_TO*1..2]->(p:Protein)`. ⚠ CATALYSES is gated on the proteome in the graph:
+with a partial proteome (Protein=117) the metabolite **nodes** load but CATALYSES is
+sparse and the layer is largely disconnected until the full proteome is loaded.
 
 ---
 
