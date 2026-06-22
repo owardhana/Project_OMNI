@@ -34,18 +34,22 @@ that were in 00_download.sh #comments). On inspection:
   cttv's own EFO ids only covered 4/33). **Result: 128,714 DIFFERENTIALLY_EXPRESSED
   edges across 16 cohorts** (the other 12 mapped cohorts lack ≥10 adjacent normals
   — OV/LAML/GBM/LGG/TGCT/UVM/UCS have 0 normals — and 5 have no disease node).
-- **COSMIC CGC → STILL BLOCKED.** The downloaded `cosmic_cancer_gene_census.csv` is
-  an HTML *login page* (387 lines, `<title>Login</title>`), not CSV. Sanger gates it
-  behind a free account. 12_cosmic.py now detects the HTML head and aborts with a
-  clear message. Phase 2 (cancer_gene flags) stays UNRUN until a real CSV is placed
-  in data/raw/ (overwriting the login page).
-- **Recon3D → WRONG FORMAT (held).** The downloaded `Recon3D_301.zip` contains
-  MATLAB `.mat` files, NOT SBML XML, so 14_metabolomics.py (libsbml) cannot read it.
-  Even with SBML, Phase 6 is gated on the full proteome (Protein=117 → ~0 CATALYSES),
-  so metabolomics is HELD regardless. To unblock later: load the proteome
-  (05_proteins/06_uniprot_enrich) AND fetch Recon3D as SBML → data/raw/Recon3D.xml.
-- **HMDB → present but unused.** `hmdb_metabolites.xml` (6.4GB) is fine; only needed
-  for name cross-ref, and Phase 6 is held anyway.
+- **COSMIC CGC → RESOLVED & LOADED.** The user downloaded the v104 GRCh37 tar
+  (`Cosmic_CancerGeneCensus_Tsv_v104_GRCh37.tar`, a `*.tsv.gz` with GENE_SYMBOL/TIER).
+  12_cosmic.py now auto-resolves tar/tsv.gz/csv and the column-naming variants.
+  **Result: 752 genes flagged cancer_gene=true** (580 tier-1, 172 tier-2; TP53→tier 1).
+- **Recon3D → RESOLVED & LOADED (via .mat).** The `Recon3D_301.zip` ships a MATLAB
+  COBRA model (.mat), not SBML, so 14_metabolomics.py was rewritten to use
+  `scipy.io.loadmat` (mets/metHMDBID/metCHEBIID/metNames/metFormulas/metCharges/
+  metInChIString + rxnGeneMat + S matrix). Recon3D genes are Entrez ids → crosswalked
+  to Ensembl via the HGNC file → UniProt via the graph. **Result: 1,277 Metabolite
+  nodes** (deduped per chemical). ⚠ **CATALYSES = 8 edges only** — just 5 of 3,283
+  mapped genes hit the partial proteome (Protein=117 = the TF subset), so the
+  metabolite layer is loaded but largely DISCONNECTED until the full proteome is
+  loaded (05_proteins/06_uniprot_enrich).
+- **HMDB → USED.** `hmdb_metabolites.zip` (6.4GB xml) is streamed (iterparse, bounded
+  mem) to fill canonical name/inchikey for HMDB-keyed metabolites. 698 nodes enriched
+  (Recon3D `HMDB00015` normalised to `HMDB0000015` to join — verified nonzero).
 
 ## ENCODE / Phase 9 — HELD OFF (confirmed by user 2026-06-22)
 Phase 9 (ENCODE cCREs) remains intentionally NOT started. The graph is already
@@ -56,15 +60,15 @@ user-driven AuraDB migration first. User explicitly confirmed it is OK to hold.
 | Phase | Scope | Status |
 |-------|-------|--------|
 | 1 | downloads (00_download.sh) | DONE — URLs/names point at the working files now (TCGA loaded; COSMIC/Recon3D noted) |
-| 2 | COSMIC flags (12_cosmic.py) + DAG | CODE_COMPLETE — BLOCKED: COSMIC file is an HTML login page (HTML guard added) |
+| 2 | COSMIC flags (12_cosmic.py) + DAG | **DONE — 752 genes flagged cancer_gene from v104 tar; verified** |
 | 3 | TCGA DE (13_tcga.py) + DAG | **DONE — 128,714 DIFFERENTIALLY_EXPRESSED edges / 16 cohorts loaded & verified** |
 | 4 | Backend TCGA models+traversal+/cancer | DONE (live-verified; data gate now RUN — see ledger) |
 | 5 | ADR-0009 | DONE |
-| 6 | Metabolomics ETL (14_metabolomics.py) + DAG + libsbml | CODE_COMPLETE — HELD: Recon3D zip is .mat not SBML + Protein=117 |
-| 7 | Backend metabolite models+Z shift+indexes+API | DONE (live-verified; metabolite data gate still UNRUN — Phase 6 held) |
+| 6 | Metabolomics ETL (14_metabolomics.py via scipy .mat + HMDB) | **DONE — 1,277 metabolites loaded & verified; CATALYSES=8 (sparse, proteome-gated)** |
+| 7 | Backend metabolite models+Z shift+indexes+API | DONE (live-verified; metabolite data gates now RUN — see ledger) |
 | 8 | Frontend metabolomics layer + Z shift + UI polish | DONE — 8a/8b (33d27ed) + 8c (41fd9de); + colour-consistency fix (see ledger) |
 | 9 | ENCODE cCREs | HELD OFF (user-confirmed 2026-06-22; needs AuraDB migration) |
-| 10 | Tests | DONE for backend (layer-z PASS; TCGA data gates now RUN; metabolite/COSMIC SKIP) |
+| 10 | Tests | DONE for backend (layer-z PASS; all Phase-3 data gates now RUN/PASS) |
 
 ## Verification ledger
 - Phase 4 conductance: PASS (DE |log2fc|=2→0.5, =8→1.0 cap, none→0.25; CATALYSES 0.7).
@@ -74,7 +78,8 @@ user-driven AuraDB migration first. User explicitly confirmed it is OK to hold.
 - Phase 7 index DDL: PASS (create_indexes() applied node_search widen + metabolite idxs).
 - Phase 4/7 endpoints: PASS no-crash on live graph (/cancer→[], metabolite lookup→None).
 - Regression: PASS (15 existing query tests; search + TP53 traversal intact).
-- Phase 2 gate (cancer_gene>0): UNRUN — COSMIC file is a login page (still blocked).
+- Phase 2 gate (cancer_gene>0): **PASS — 752 genes flagged** (580 tier-1, 172 tier-2;
+  TP53→cancer_gene=true tier 1). Loaded from the v104 COSMIC tar.
 - Phase 3 gate (DE edges>1000): **PASS — 128,714 edges, 16 cohorts** (range log2fc
   -18.25..13.69; ERBB2 up in UCEC / down in renal; DataSource 13_tcga recorded).
   Both data-gated tests' assertions verified PASS via direct Cypher:
@@ -83,8 +88,12 @@ user-driven AuraDB migration first. User explicitly confirmed it is OK to hold.
   the pytest *runner* couldn't finish `collecting...` — module import through the
   iCloud-synced project dir (~/Desktop is symlinked into CloudDocs) is pathologically
   slow (also why tsc -b took minutes). Env issue, not a code/test failure.
-- Phase 6 gate (metabolites>1000, CATALYSES>5000, LDHA→lactate): UNRUN — Recon3D .mat
-  (not SBML) + Protein=117 (held).
+- Phase 6 gate: **PARTIAL PASS.** metabolites>1000 → **1,277 PASS** (698 HMDB-enriched
+  w/ inchikey; layer_z=900; searchable: Cortexolone/S-Adenosylmethionine resolve).
+  CATALYSES>5000 → **FAIL by design: only 8 edges** (5/3,283 genes hit Protein=117).
+  LDHA→lactate → N/A (LDHA's protein not among the 117). Metabolite endpoints live-
+  verified: /metabolite/{id}→200, /metabolite/{id}/graph→bounded 150-node neighborhood
+  (Proton→protein→network). The layer is loaded but disconnected pending full proteome.
 - `= 900` audit: PASS backend (only via METABOLITE_LAYER_Z constant) + frontend
   (only intended metabolomics y:600 / phenotype y:900; DISEASE_LAYER_Z now 1200).
 - Phase 8a/8b (commit 33d27ed): PASS tsc -b + vite build (both green; dist built).
@@ -108,17 +117,16 @@ user-driven AuraDB migration first. User explicitly confirmed it is OK to hold.
   (metabolite/edge render — no data). Glass adapted to the LIGHT theme (dark glass
   would force a full palette inversion) — say the word for a full dark theme.
 
-## BUILD STATUS (updated 2026-06-22)
-- Phases 1/3/4/5/7/8/10 DONE + verified. **Phase 3 (TCGA DE) is now LOADED**
-  (128,714 edges) after the user supplied the data and 13_tcga.py was reworked
-  (matched-normal log2FC + graph-verified crosswalk).
-- Phase 2 (COSMIC) BLOCKED — supplied file is an HTML login page; needs a real CSV.
-- Phase 6 (metabolomics) HELD — supplied Recon3D is .mat not SBML, and gated on the
-  full proteome (Protein=117) regardless.
+## BUILD STATUS (updated 2026-06-22, second pass — user supplied COSMIC + asked to
+## parse Recon3D via scipy and use HMDB)
+- **Phases 1–8 + 10 all DONE + verified.** All three data-blocked phases now LOADED:
+  Phase 2 COSMIC (752 cancer-gene flags), Phase 3 TCGA DE (128,714 edges / 16 cohorts),
+  Phase 6 metabolomics (1,277 metabolites, HMDB-enriched).
+- **One known limitation:** Phase-6 CATALYSES = 8 edges only (the metabolite layer is
+  loaded but largely disconnected) because the graph holds a partial proteome
+  (Protein=117). The single remaining unblock for a *connected* metabolite layer is to
+  load the full proteome (05_proteins/06_uniprot_enrich) and re-run 14_metabolomics.py.
 - Phase 9 (ENCODE) HELD OFF — user-confirmed; needs the AuraDB migration first.
-- To finish the remainder: drop a real COSMIC CSV + Recon3D SBML (and reload the
-  proteome) into data/raw/, then `etl/.venv/bin/python etl/12_cosmic.py` /
-  `14_metabolomics.py`; OR trigger Phase 9 after AuraDB migration.
 
 ## Notes / decisions
 - "agent writes carry source_agent/agent_version/run_timestamp" applies to
