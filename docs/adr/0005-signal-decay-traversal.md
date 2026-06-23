@@ -4,7 +4,7 @@ Status: Accepted (2026-06-15)
 
 ## Context
 
-The spec bounds neighborhood queries by a fixed "1–2 hops" (02_mvp.md;
+The spec bounds neighborhood queries by a fixed "1–2 hops" ([vision-and-mvp.md](../vision-and-mvp.md);
 `max_hops` in `backend/api/models.py` and the gene queries). Two pressures break
 that:
 

@@ -1,6 +1,6 @@
 """ETL 10 — Enrich Gene nodes with NCBI Gene functional summaries.
 
-Enrichment pattern (06_data_vision.md Pattern 2). For Gene nodes that have no
+Enrichment pattern (docs/data-architecture.md Pattern 2). For Gene nodes that have no
 ``summary_text``, resolve the Entrez gene id from the HGNC file (ensembl_gene_id
 -> entrez_id), fetch the paragraph-length NCBI Gene summary in batches via the
 E-utilities ``esummary`` endpoint, and SET it back keyed by ensembl_id. It never

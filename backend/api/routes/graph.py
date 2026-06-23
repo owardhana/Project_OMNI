@@ -1,4 +1,4 @@
-"""Multi-seed merge + shortest-path endpoints (06_data_vision.md Phase 2).
+"""Multi-seed merge + shortest-path endpoints (docs/data-architecture.md Phase 2).
 
 POST /api/graph/multi — run signal-decay traversal from several seeds in parallel,
 merge into one graph, flag disconnected clusters.
@@ -24,19 +24,25 @@ _LABEL_FIELD: dict[str, tuple[str, str]] = {
     "protein": ("Protein", "uniprot_id"),
     "variant": ("Variant", "rsid"),
     "disease": ("Disease", "ontology_id"),
+    "metabolite": ("Metabolite", "hmdb_id"),  # chebi_id is the fallback key (ADR-0009)
 }
 _KIND = {
     "Gene": "gene", "Transcript": "transcript", "Protein": "protein",
-    "Variant": "variant", "Disease": "disease",
+    "Variant": "variant", "Disease": "disease", "Metabolite": "metabolite",
 }
 _MAX_HOPS = 6  # hard cap (biologically meaningless beyond this)
 
 
 def _node_key(node: dict) -> str | None:
+    # MUST list every business key the traversal emits as an edge source/target,
+    # incl. metabolite hmdb_id/chebi_id — omitting them drops metabolite nodes from
+    # the merge and orphans the proteins that only connect through them (false
+    # "separate clusters"). Order mirrors the traversal's coalesce.
     p = node["props"]
     return (
         p.get("ensembl_id") or p.get("uniprot_id") or p.get("rsid")
         or p.get("ontology_id") or p.get("ensembl_tx_id")
+        or p.get("hmdb_id") or p.get("chebi_id")
     )
 
 
@@ -61,27 +67,28 @@ def _merge_raw(raws: list[dict]) -> dict:
     return {"nodes": list(nodes.values()), "edges": list(edges.values())}
 
 
-def _component_count(node_keys: set[str], edges: list[dict]) -> int:
+def _component_map(node_keys: set[str], edges: list[dict]) -> dict[str, int]:
+    """Map each node key to a connected-component id (0-based)."""
     adj: dict[str, set[str]] = {k: set() for k in node_keys}
     for e in edges:
         s, t = e["source"], e["target"]
         if s in adj and t in adj:
             adj[s].add(t)
             adj[t].add(s)
-    seen: set[str] = set()
-    components = 0
+    comp_of: dict[str, int] = {}
+    cid = 0
     for start in node_keys:
-        if start in seen:
+        if start in comp_of:
             continue
-        components += 1
         stack = [start]
         while stack:
             x = stack.pop()
-            if x in seen:
+            if x in comp_of:
                 continue
-            seen.add(x)
-            stack.extend(y for y in adj[x] if y not in seen)
-    return components
+            comp_of[x] = cid
+            stack.extend(y for y in adj[x] if y not in comp_of)
+        cid += 1
+    return comp_of
 
 
 @router.post("/graph/multi", response_model=models.GraphResponse)
@@ -99,21 +106,28 @@ async def graph_multi(req: models.MultiGraphRequest):
     raws = await asyncio.gather(*(signal_decay_subgraph([k]) for k in keys))
     merged = _merge_raw(raws)
     node_keys = {k for n in merged["nodes"] if (k := _node_key(n)) is not None}
-    components = _component_count(node_keys, merged["edges"])
+    comp_of = _component_map(node_keys, merged["edges"])
+
+    # The meaningful warning is about the SEEDS: how many distinct clusters do the
+    # selected entities fall into? (Counting *all* node components instead would
+    # report island nodes left by max_nodes trimming as if seeds were disconnected
+    # — e.g. "11 of 1".) A single seed is always one cluster, so never warns.
+    seed_components = {comp_of[k] for k in keys if k in comp_of}
+    n_seed_clusters = len(seed_components)
 
     resp = models.graph_response_from_raw(merged, settings.tissues)
     resp.metadata = {
-        "connected": components <= 1,
-        "component_count": components,
+        "connected": n_seed_clusters <= 1,
+        "component_count": n_seed_clusters,
         "seeds": req.seed_ids,
     }
-    if components > 1:
+    if len(keys) >= 2 and n_seed_clusters > 1:
         resp.warnings = [
             models.GraphWarning(
                 type="disconnected",
-                component_count=components,
+                component_count=n_seed_clusters,
                 message=(
-                    f"{components} of {len(keys)} selected entities form separate "
+                    f"{n_seed_clusters} of {len(keys)} selected entities form separate "
                     "clusters — they may not be directly connected at this signal "
                     "threshold."
                 ),

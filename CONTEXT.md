@@ -59,26 +59,36 @@ edge attribute. A Disease node is a valid traversal seed alongside Gene.
 Source: GWAS Catalog, EFO ontology.
 _Avoid_: "disease attribute", "trait string" — Disease is always a node.
 
+**Metabolite**:
+A small-molecule substrate or product of an enzymatic reaction. Lives in the
+**metabolomics layer** (Layer 4, between proteomics and phenotype). Machine ID =
+HMDB ID (primary, e.g. `HMDB0000122` for glucose); fallback = ChEBI ID
+(e.g. `CHEBI:4167`) for metabolites not in HMDB. A first-class traversable node.
+Source: Recon3D human metabolic reconstruction (SBML).
+_Avoid_: "compound", "small molecule" — use metabolite in domain language.
+
 **Embedding**:
 A 1536-dimensional float array stored as a property on Gene, Protein, and Disease
 nodes, encoding their `summary_text` for semantic search. Populated by the
 embedding agent using `text-embedding-3-small` via OpenRouter. Not stored on
-Transcript or Variant nodes (no meaningful free text). Queried via Neo4j native
-vector index (`db.index.vector`), composable with graph traversal in Cypher.
+Transcript, Variant, or Metabolite nodes (no meaningful free text). Queried via
+Neo4j native vector index (`db.index.vector`), composable with graph traversal.
 _Avoid_: "vector" as a synonym in domain language — use embedding.
 
 ### Layers
 
 **Layer** (omics layer):
 A horizontal plane in the stacked model. Bottom to top:
-**genomics → transcriptomics → proteomics → phenotype**.
+**genomics → transcriptomics → proteomics → metabolomics → phenotype**.
 A node belongs to exactly one layer, fixed by its **entity kind**.
 
-**Genomics layer**: holds **gene** and **variant** nodes.
+**Genomics layer**: holds **gene**, **variant**, and **cCRE** nodes.
 **Transcriptomics layer**: holds **transcript** nodes.
 **Proteomics layer**: holds **protein** nodes (all subtypes, including TFs).
-**Phenotype layer**: holds **disease** nodes. The 4th layer, above proteomics.
-_(Metabolomics layer is future — layer 5.)_
+**Metabolomics layer**: holds **metabolite** nodes. Layer 4, above proteomics.
+  Phase 3 addition (ADR-0009). Orange colour (#fb923c).
+**Phenotype layer**: holds **disease** nodes. Layer 5, above metabolomics.
+  (Was Layer 4 before Metabolomics was added.)
 
 ### Relationships
 

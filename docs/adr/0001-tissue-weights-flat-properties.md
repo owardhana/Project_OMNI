@@ -4,7 +4,7 @@ Status: Accepted (2026-06-15)
 
 ## Context
 
-The MVP spec (02_mvp.md, 04_decisions.md) models the PRODUCES edge with a single
+The MVP spec (consolidated in [vision-and-mvp.md](../vision-and-mvp.md)) models the PRODUCES edge with a single
 map-valued property:
 
 ```cypher

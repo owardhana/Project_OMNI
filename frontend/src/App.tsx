@@ -4,11 +4,13 @@ import './App.css';
 import { api, DEFAULT_GENE } from './api/client';
 import EdgeDetailPanel from './components/EdgeDetailPanel';
 import EntityBrowser from './components/EntityBrowser';
+import GraphLegend from './components/GraphLegend';
 import GraphViewer3D from './components/GraphViewer3D';
 import LayerToggle from './components/LayerToggle';
 import NodeDetailPanel from './components/NodeDetailPanel';
 import QueryPanel from './components/QueryPanel';
 import SearchBar from './components/SearchBar';
+import ShortcutsOverlay from './components/ShortcutsOverlay';
 import TissueFilter from './components/TissueFilter';
 import { useGraph } from './hooks/useGraph';
 import type { LayerKey } from './styles/layers';
@@ -23,6 +25,7 @@ export default function App() {
     error,
     loadGene,
     loadDisease,
+    loadMetabolite,
     expandNode,
     mergeInto,
     clearGraph,
@@ -36,16 +39,49 @@ export default function App() {
     genomics: true,
     transcriptomics: true,
     proteomics: true,
+    metabolomics: true,
     phenotype: true,
   });
   const [selectedNode, setSelectedNode] = useState<FGNode | null>(null);
   const [hoveredEdge, setHoveredEdge] = useState<FGLink | null>(null);
   const [selectedEdge, setSelectedEdge] = useState<FGLink | null>(null);
+  const [cameraMode, setCameraMode] = useState<'orbit' | 'fly'>('orbit');
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  // First-visit hint that the '?' overlay exists (shown once, then dismissed).
+  const [showHint, setShowHint] = useState(
+    () => localStorage.getItem('shortcuts_shown') !== '1',
+  );
 
   // Initial load: DEFAULT_GENE (TP53) neighborhood.
   useEffect(() => {
     loadGene(DEFAULT_GENE);
   }, [loadGene]);
+
+  // '?' toggles the shortcut overlay; Esc closes overlay/panels. Gated on inputs
+  // so typing in search/query boxes still works. (GraphViewer3D owns C/F/Esc for
+  // the camera; this listener is additive — Esc here also clears selection.)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      if (e.key === '?') {
+        setShortcutsOpen((v) => !v);
+        setShowHint(false);
+        localStorage.setItem('shortcuts_shown', '1');
+      } else if (e.key === 'Escape') {
+        setShortcutsOpen(false);
+        setSelectedNode(null);
+        setSelectedEdge(null);
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, []);
+
+  const dismissHint = () => {
+    setShowHint(false);
+    localStorage.setItem('shortcuts_shown', '1');
+  };
 
   const handleSelect = (r: SearchResult) => {
     setSelectedNode(null);
@@ -53,6 +89,9 @@ export default function App() {
     if (r.node_type === 'disease') {
       setCurrentEntity(r.name ?? r.id);
       loadDisease(r.id); // /api/disease/{ontology_id}/graph
+    } else if (r.node_type === 'metabolite') {
+      setCurrentEntity(r.name ?? r.id);
+      loadMetabolite(r.id); // /api/metabolite/{hmdb_id|chebi_id}/graph
     } else {
       // gene / protein / transcript all resolve via the gene graph by symbol.
       const symbol = r.hgnc_symbol ?? r.id;
@@ -69,8 +108,10 @@ export default function App() {
   };
 
   const handleExpand = (node: FGNode) => {
-    // Both genes and TF proteins carry a symbol that resolves to a gene graph.
-    if (node.hgnc_symbol) expandNode(node.hgnc_symbol);
+    // Both genes and TF proteins carry a symbol that resolves to a gene graph;
+    // variant/metabolite/disease nodes have no hgnc_symbol, so guard the access.
+    const sym = 'hgnc_symbol' in node ? node.hgnc_symbol : undefined;
+    if (sym) expandNode(sym);
   };
 
   // Entity-browser multi-load: merge each seed's subgraph additively; surface
@@ -142,6 +183,7 @@ export default function App() {
         }}
         onEdgeHover={setHoveredEdge}
         onEdgeClick={setSelectedEdge}
+        onCameraModeChange={setCameraMode}
       />
 
       <EntityBrowser onMultiLoad={handleMultiLoad} onClear={handleClear} />
@@ -176,23 +218,41 @@ export default function App() {
         <TissueFilter active={activeTissue} onChange={handleTissueChange} />
       </header>
 
-      <div className="status-line">
-        {loading && <span>Loading {currentEntity}…</span>}
-        {error && <span className="status-error">Error: {error}</span>}
-        {!loading && !error && (
-          <span>
-            {currentEntity}: {graphData.nodes.length} nodes, {graphData.links.length} edges
+      {error && (
+        <div className="error-banner" role="alert">
+          <span className="error-icon" aria-hidden>⚠</span>
+          <span>Failed to load {currentEntity}: {error}</span>
+        </div>
+      )}
+
+      <GraphLegend data={graphData} />
+
+      {/* Thin bottom status bar: graph metrics · active seed(s) · camera mode. */}
+      <div className="status-bar">
+        {loading ? (
+          <span className="skeleton-line" aria-label={`Loading ${currentEntity}`} />
+        ) : (
+          <span className="status-metric">
+            <strong>{graphData.nodes.length}</strong> nodes ·{' '}
+            <strong>{graphData.links.length}</strong> edges
           </span>
         )}
+        <span className="status-sep">·</span>
+        <span className="status-seed">
+          {multiSeeds.length > 0
+            ? multiSeeds.map((s) => s.id).join(', ')
+            : currentEntity}
+        </span>
+        <span className="status-spacer" />
+        <span className={`status-cam ${cameraMode}`}>{cameraMode.toUpperCase()}</span>
       </div>
 
-      <div className="legend">
-        <span><i className="dot gene" /> Gene</span>
-        <span><i className="dot protein" /> TF protein</span>
-        <span><i className="dot transcript" /> Transcript</span>
-        <span><i className="dot variant" /> Variant</span>
-        <span><i className="dot disease" /> Disease</span>
-      </div>
+      {showHint && (
+        <button className="shortcut-hint" onClick={dismissHint}>
+          Press <kbd className="kbd">?</kbd> for keyboard shortcuts
+        </button>
+      )}
+      {shortcutsOpen && <ShortcutsOverlay onClose={() => setShortcutsOpen(false)} />}
 
       <NodeDetailPanel
         node={selectedNode}

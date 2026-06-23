@@ -2,7 +2,7 @@
 
 Kept deliberately separate from the async backend client (``backend/db``): ETL
 scripts are one-shot batch jobs run directly with Python and must not import
-backend modules (see 03_structure.md module dependency rules).
+backend modules (see README.md module dependency rules).
 """
 
 import os

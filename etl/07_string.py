@@ -1,19 +1,20 @@
 """ETL 07 — Load STRING protein-protein INTERACTS_WITH edges.
 
-Topology from a bulk file (06_data_vision.md Pattern 1). Reads the STRING v12
+Topology from a bulk file (docs/data-architecture.md Pattern 1). Reads the STRING v12
 human links file, keeps interactions at/above the confidence threshold whose BOTH
 endpoints already exist as Protein nodes, and MERGEs an INTERACTS_WITH edge
 between them. STRING uses Ensembl protein ids (``9606.ENSP...``); we map them to
 UniProt via ``IdMapper.ensp_to_uniprot`` and skip (never guess) any id that does
 not map.
 
-Threshold from the STRING_MIN_CONFIDENCE env var (default 0.9 -> >=900 on STRING's
+Threshold from the STRING_MIN_CONFIDENCE env var (default 0.95 -> >=950 on STRING's
 0-1000 integer scale). ETL reads the env var directly rather than importing the
-backend settings (03_structure.md module rules).
+backend settings (README.md module rules).
 
-Note: with only the TF protein slice in the graph, an interaction is kept only if
-BOTH partners are TF proteins, so the edge count is far below the full-proteome
-~50k figure — that figure assumes the ~20k proteome is loaded.
+Note: 05_proteins now mints the full ~20k proteome (ADR-0010), so an interaction is
+kept whenever BOTH partners are protein-coding — i.e. real human PPI at full scale.
+The default threshold was raised 0.9 -> 0.95 (highest-confidence only) to keep
+INTERACTS_WITH at a manageable volume now that the whole proteome is present.
 
     etl/.venv/bin/python etl/07_string.py
 """
@@ -57,7 +58,7 @@ def main() -> None:
         )
 
     # STRING stores scores as 0-1000 integers; STRING_MIN_CONFIDENCE is 0-1.
-    threshold = int(float(os.getenv("STRING_MIN_CONFIDENCE", "0.9")) * 1000)
+    threshold = int(float(os.getenv("STRING_MIN_CONFIDENCE", "0.95")) * 1000)
     print(f"STRING combined_score threshold: >= {threshold}")
 
     mapper = IdMapper()

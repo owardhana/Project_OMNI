@@ -19,10 +19,14 @@ INDEX_STATEMENTS: list[str] = [
     # Phase 2: the search index was renamed gene_search -> node_search and widened
     # to cover Protein and Disease (ADR-0007). Drop the old one for a clean rename.
     "DROP INDEX gene_search IF EXISTS",
+    # Phase 3 (ADR-0009): widen node_search to cover Metabolite (name + formula).
+    # The label/property set of a fulltext index is fixed at creation, so to add
+    # Metabolite we drop and recreate (IF EXISTS / IF NOT EXISTS keep it idempotent).
+    "DROP INDEX node_search IF EXISTS",
     """
     CREATE FULLTEXT INDEX node_search IF NOT EXISTS
-    FOR (n:Gene|Transcript|Protein|Disease)
-    ON EACH [n.hgnc_symbol, n.description, n.summary_text, n.name]
+    FOR (n:Gene|Transcript|Protein|Disease|Metabolite)
+    ON EACH [n.hgnc_symbol, n.description, n.summary_text, n.name, n.formula]
     """,
     # B-tree indexes — existing Gene/Transcript plus Phase 2 node types.
     "CREATE INDEX gene_ensembl_idx IF NOT EXISTS FOR (n:Gene) ON (n.ensembl_id)",
@@ -32,6 +36,9 @@ INDEX_STATEMENTS: list[str] = [
     "CREATE INDEX protein_symbol_idx IF NOT EXISTS FOR (n:Protein) ON (n.hgnc_symbol)",
     "CREATE INDEX variant_rsid_idx IF NOT EXISTS FOR (n:Variant) ON (n.rsid)",
     "CREATE INDEX disease_ontology_idx IF NOT EXISTS FOR (n:Disease) ON (n.ontology_id)",
+    # Phase 3 (ADR-0009): metabolite lookup keys — hmdb_id primary, chebi_id fallback.
+    "CREATE INDEX metabolite_hmdb_idx IF NOT EXISTS FOR (n:Metabolite) ON (n.hmdb_id)",
+    "CREATE INDEX metabolite_chebi_idx IF NOT EXISTS FOR (n:Metabolite) ON (n.chebi_id)",
     # Vector indexes (Neo4j 5.11+ native syntax). 1536-dim cosine, per ADR-0008.
     """
     CREATE VECTOR INDEX gene_embeddings IF NOT EXISTS

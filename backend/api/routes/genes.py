@@ -19,6 +19,20 @@ async def get_gene(hgnc_symbol: str):
     return models.gene_node_from_props(record["props"], record["is_tf"])
 
 
+@router.get("/gene/{hgnc_symbol}/cancer")
+async def get_gene_cancer(hgnc_symbol: str):
+    """TCGA differential-expression summary for a gene (Phase 3).
+
+    For each tumor type the gene is DIFFERENTIALLY_EXPRESSED in, returns the tumor
+    type's EFO disease, overall up/down gene counts, and top-5 genes by log2fc in
+    each direction. Answers "what cancers is TP53 differentially associated with?"
+    Returns [] when no TCGA edges exist yet (404 only if the gene is absent)."""
+    record = await gene_queries.get_gene_by_symbol(hgnc_symbol)
+    if not record:
+        raise HTTPException(status_code=404, detail=f"Gene '{hgnc_symbol}' not found")
+    return await gene_queries.get_gene_cancer_associations(hgnc_symbol)
+
+
 @router.get("/gene/{hgnc_symbol}/graph", response_model=models.GraphResponse)
 async def get_gene_graph(
     hgnc_symbol: str,

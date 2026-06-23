@@ -4,7 +4,7 @@ Status: Accepted (2026-06-15)
 
 ## Context
 
-The original model (01_vision.md, 02_mvp.md, 04_decisions.md) treats a
+The original model (consolidated in [vision-and-mvp.md](../vision-and-mvp.md)) treats a
 transcription factor as a **`:Gene`** node and `REGULATES` as a **gene→gene**
 edge inside the genomics layer. "TF-ness" is not a stored type — it is *derived*
 at query time as `count(outgoing REGULATES) > 0` (`backend/db/queries/genes.py`).
@@ -69,7 +69,7 @@ is expected to be ~0.
   `MATCH (s:Gene {hgnc_symbol: row.tf})` to `MATCH (s:Protein {hgnc_symbol: row.tf})`;
   must run after proteins are minted.
 - **Text2Cypher prompt** (`backend/llm/prompts/text2cypher.py`, and the skeleton in
-  02_mvp.md) — schema + every example must change `(:Gene)-[:REGULATES]->(:Gene)`
+  [vision-and-mvp.md](../vision-and-mvp.md)) — schema + every example must change `(:Gene)-[:REGULATES]->(:Gene)`
   to `(:Protein)-[:REGULATES]->(:Gene)`, add the `Protein` node and
   `TRANSLATES_TO`/`ENCODES` edges. Without this the LLM emits wrong Cypher.
 - **Citation agent** (`backend/agents/citation_agent.py:53`) — the uncited-edge

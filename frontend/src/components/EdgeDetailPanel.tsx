@@ -7,7 +7,10 @@ interface Props {
 
 function endpointLabel(end: string | FGNode): string {
   if (typeof end === 'object') {
-    return end.hgnc_symbol ?? end.id;
+    // hgnc_symbol only exists on gene/transcript/protein nodes; variant,
+    // metabolite, and disease fall back to id (their canonical key).
+    const sym = 'hgnc_symbol' in end ? end.hgnc_symbol : undefined;
+    return sym ?? end.id;
   }
   return end;
 }

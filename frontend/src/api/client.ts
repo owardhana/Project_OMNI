@@ -74,6 +74,15 @@ export const api = {
       }`,
     ),
 
+  // Metabolite neighborhood (ADR-0009/0010). Seeded by hmdb_id or chebi_id — the
+  // search result's `id` carries whichever the node has.
+  getMetaboliteGraph: (id: string, maxNodes?: number) =>
+    getJSON<GraphResponse>(
+      `/api/metabolite/${encodeURIComponent(id)}/graph${
+        maxNodes != null ? `?max_nodes=${maxNodes}` : ''
+      }`,
+    ),
+
   getTranscript: (ensemblTxId: string) =>
     getJSON<TranscriptNode>(`/api/transcript/${encodeURIComponent(ensemblTxId)}`),
 

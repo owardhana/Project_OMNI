@@ -1,6 +1,6 @@
 """ETL 06 — Enrich existing Protein nodes with UniProt function + annotation.
 
-Enrichment pattern (06_data_vision.md "Pattern 2 — REST API per entity): reads the
+Enrichment pattern (docs/data-architecture.md "Pattern 2 — REST API per entity): reads the
 Protein nodes already in the graph (the TF slice minted by 05_proteins.py) and
 calls the UniProt REST API once per accession to attach the free-text function
 comment (for embedding), subcellular location, GO terms, molecular weight, and a

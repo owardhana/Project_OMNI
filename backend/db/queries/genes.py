@@ -22,11 +22,15 @@ _TISSUE_ALIASES = {
     "brain": "brain_prefrontal_cortex",
 }
 
-# A gene "is a TF" iff it encodes one of our (TF) proteins, via the transcript
-# (the path all 117 proteins actually use) or the ENCODES fallback.
+# A gene "is a TF" iff it encodes a TF *protein*, via the transcript
+# (PRODUCES -> TRANSLATES_TO) or the ENCODES fallback. The subtype filter is
+# REQUIRED post-ADR-0010: the full proteome means ~20k genes now reach *some*
+# Protein, so an unfiltered "has a protein" clause flags every protein-coding
+# gene as a TF (ADR-0004's "is_tf breaks SILENTLY"). Only subtype matters.
 _GENE_IS_TF_CLAUSE = (
-    "(EXISTS { (g)-[:ENCODES]->(:Protein) } "
-    "OR EXISTS { (g)-[:PRODUCES]->(:Transcript)-[:TRANSLATES_TO]->(:Protein) })"
+    "(EXISTS { (g)-[:ENCODES]->(:Protein {subtype: 'transcription_factor'}) } "
+    "OR EXISTS { (g)-[:PRODUCES]->(:Transcript)"
+    "-[:TRANSLATES_TO]->(:Protein {subtype: 'transcription_factor'}) })"
 )
 
 
@@ -72,6 +76,52 @@ async def get_gene_neighborhood(
     return await signal_decay_subgraph(
         [ensembl_id], decay=decay, min_signal=min_signal, max_nodes=max_nodes
     )
+
+
+# For each tumor type the seed gene is differentially expressed in, report the
+# broader DE landscape of that (tumor_type, disease): how many genes are up vs
+# down and the top-5 by |log2fc| in each direction. Phase 3 (08_phase3...).
+_GENE_CANCER = """
+MATCH (g:Gene {hgnc_symbol: $symbol})-[seed:DIFFERENTIALLY_EXPRESSED]->(d:Disease)
+WITH DISTINCT d, seed.tumor_type AS tumor_type
+CALL {
+  WITH d, tumor_type
+  MATCH (:Gene)-[r:DIFFERENTIALLY_EXPRESSED {tumor_type: tumor_type}]->(d)
+  RETURN sum(CASE WHEN r.direction = 'up' THEN 1 ELSE 0 END) AS up_count,
+         sum(CASE WHEN r.direction = 'down' THEN 1 ELSE 0 END) AS down_count
+}
+CALL {
+  WITH d, tumor_type
+  MATCH (og:Gene)-[r:DIFFERENTIALLY_EXPRESSED {tumor_type: tumor_type}]->(d)
+  WHERE r.direction = 'up'
+  WITH og, r ORDER BY r.log2fc DESC LIMIT 5
+  RETURN collect(og.hgnc_symbol) AS top_up_genes
+}
+CALL {
+  WITH d, tumor_type
+  MATCH (og:Gene)-[r:DIFFERENTIALLY_EXPRESSED {tumor_type: tumor_type}]->(d)
+  WHERE r.direction = 'down'
+  WITH og, r ORDER BY r.log2fc ASC LIMIT 5
+  RETURN collect(og.hgnc_symbol) AS top_down_genes
+}
+RETURN tumor_type,
+       d.ontology_id AS efo_id,
+       d.name AS disease_name,
+       up_count, down_count, top_up_genes, top_down_genes
+ORDER BY (up_count + down_count) DESC
+"""
+
+
+async def get_gene_cancer_associations(symbol: str) -> list[dict]:
+    """Per-tumor-type differential-expression summary for a gene (Phase 3).
+
+    Returns one row per tumor type the gene is DIFFERENTIALLY_EXPRESSED in, each
+    with the tumor type's overall up/down gene counts and top-5 genes by log2fc.
+    Empty list when the gene has no DIFFERENTIALLY_EXPRESSED edges (e.g. before
+    13_tcga has run)."""
+    async with get_session() as session:
+        rows = await (await session.run(_GENE_CANCER, symbol=symbol)).data()
+    return rows
 
 
 # Backwards-compatible alias: callers that asked for a 2-hop subgraph now get the

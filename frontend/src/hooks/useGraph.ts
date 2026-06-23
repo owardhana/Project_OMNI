@@ -1,7 +1,14 @@
 import { useCallback, useState } from 'react';
 
 import { api } from '../api/client';
-import { DISEASE_Y, GENE_Y, PROTEIN_Y, TRANSCRIPT_Y, Y_JITTER } from '../styles/layers';
+import {
+  DISEASE_Y,
+  GENE_Y,
+  METABOLITE_Y,
+  PROTEIN_Y,
+  TRANSCRIPT_Y,
+  Y_JITTER,
+} from '../styles/layers';
 import type { FGNode, ForceGraphData, GraphResponse } from '../types/graph';
 
 // Deterministic per-node jitter in [-Y_JITTER, +Y_JITTER] from the node id, so a
@@ -16,6 +23,7 @@ function yTargetFor(node: FGNode): number {
   const jitter = jitterFor(node.id);
   if (node.node_type === 'transcript') return TRANSCRIPT_Y + jitter;
   if (node.node_type === 'protein') return PROTEIN_Y + jitter;
+  if (node.node_type === 'metabolite') return METABOLITE_Y + jitter;
   if (node.node_type === 'disease') return DISEASE_Y + jitter;
   return GENE_Y + jitter; // gene + variant both live in the genomics plane
 }
@@ -76,6 +84,19 @@ export function useGraph() {
     }
   }, []);
 
+  const loadMetabolite = useCallback(async (id: string) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const resp = await api.getMetaboliteGraph(id);
+      setGraphData(toForceGraph(resp));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   const expandNode = useCallback(async (symbol: string) => {
     try {
       const resp = await api.getGeneGraph(symbol);
@@ -100,6 +121,7 @@ export function useGraph() {
     error,
     loadGene,
     loadDisease,
+    loadMetabolite,
     expandNode,
     mergeInto,
     clearGraph,

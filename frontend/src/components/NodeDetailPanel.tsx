@@ -1,6 +1,6 @@
 import { useState } from 'react';
 
-import type { FGLink, FGNode, ForceGraphData } from '../types/graph';
+import type { FGLink, FGNode, ForceGraphData, MetaboliteNode } from '../types/graph';
 
 interface Props {
   node: FGNode | null;
@@ -13,11 +13,75 @@ function endId(end: string | FGNode): string {
   return typeof end === 'object' ? end.id : end;
 }
 
+// Display label for a link endpoint: symbol when the node carries one
+// (gene/transcript/protein), else its canonical id (variant/metabolite/disease).
+function endpointLabel(end: string | FGNode): string {
+  if (typeof end === 'object') {
+    const sym = 'hgnc_symbol' in end ? end.hgnc_symbol : undefined;
+    return sym ?? end.id;
+  }
+  return end;
+}
+
 // Variants ASSOCIATED_WITH this disease that are present in the current graph.
 function variantCount(ontologyId: string, links: FGLink[]): number {
   return links.filter(
     (l) => l.rel_type === 'ASSOCIATED_WITH' && endId(l.target) === ontologyId,
   ).length;
+}
+
+// CATALYSES edges (Protein -> Metabolite) incident on this metabolite (ADR-0009).
+function MetabolitePanel({
+  node,
+  links,
+  onExpand,
+}: {
+  node: MetaboliteNode;
+  links: FGLink[];
+  onExpand: (node: FGNode) => void;
+}) {
+  const edges = links.filter(
+    (l) => l.rel_type === 'CATALYSES' && endId(l.target) === node.id,
+  );
+  const proteins = [
+    ...new Set(edges.map((l) => endpointLabel(l.source))),
+  ];
+  const reactionCount = new Set(
+    edges.map((l) => l.reaction_id).filter(Boolean),
+  ).size;
+  return (
+    <>
+      <h2 className="node-title">{node.name ?? node.hmdb_id ?? node.id}</h2>
+      <div className="node-subtitle">
+        {node.hmdb_id ?? node.chebi_id ?? node.id} · Metabolite
+      </div>
+      <dl className="node-fields">
+        <dt>HMDB</dt>
+        <dd>{node.hmdb_id ?? '—'}</dd>
+        <dt>ChEBI</dt>
+        <dd>{node.chebi_id ?? '—'}</dd>
+        <dt>Formula</dt>
+        <dd>{node.formula ?? '—'}</dd>
+        <dt>Charge</dt>
+        <dd>{node.charge != null ? node.charge : '—'}</dd>
+        <dt>Reactions</dt>
+        <dd>{reactionCount}</dd>
+      </dl>
+      {proteins.length > 0 && (
+        <div className="chip-row">
+          {proteins.slice(0, 5).map((p) => (
+            <span key={p} className="go-chip">
+              {p}
+            </span>
+          ))}
+        </div>
+      )}
+      <button className="expand-btn" onClick={() => onExpand(node)}>
+        Expand Neighborhood
+      </button>
+      <p className="muted node-hint">Metabolite node (metabolomics layer)</p>
+    </>
+  );
 }
 
 export default function NodeDetailPanel({
@@ -161,6 +225,10 @@ export default function NodeDetailPanel({
           </dl>
           <p className="muted node-hint">Disease node (phenotype layer)</p>
         </>
+      )}
+
+      {node.node_type === 'metabolite' && (
+        <MetabolitePanel node={node} links={graphData.links} onExpand={onExpand} />
       )}
     </aside>
   );

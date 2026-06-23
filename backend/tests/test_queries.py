@@ -1,8 +1,10 @@
 """Cypher correctness tests against the live graph."""
 
+import pytest
+
 from backend.api import models
 from backend.api.routes.graph import (
-    _component_count,
+    _component_map,
     _merge_raw,
     _node_key,
     graph_multi,
@@ -13,7 +15,12 @@ from backend.db.queries.genes import (
     get_gene_by_symbol,
     get_gene_neighborhood,
 )
+from backend.db.queries.genes import get_gene_cancer_associations
 from backend.db.queries.graph import search_entities, search_genes
+from backend.db.queries.metabolites import (
+    get_metabolite_by_id,
+    get_metabolite_neighborhood,
+)
 from backend.db.queries.traversal import signal_decay_subgraph
 
 # Phase-2 entities present in the live graph (GWAS/ClinVar/STRING-derived). EFO
@@ -177,7 +184,10 @@ async def test_multi_seed_disconnected():
     }
     merged = _merge_raw([raw_a, raw_b])
     keys = {k for n in merged["nodes"] if (k := _node_key(n)) is not None}
-    assert _component_count(keys, merged["edges"]) == 2
+    comp_of = _component_map(keys, merged["edges"])
+    assert len(set(comp_of.values())) == 2  # two non-overlapping subgraphs
+    # The two seeds land in different components -> would warn (>=2 seeds).
+    assert comp_of["ENSG_A1"] != comp_of["ENSG_B1"]
 
 
 async def test_shortest_path_found():
@@ -212,3 +222,107 @@ async def test_entities_search():
     assert all(r["node_type"] == "gene" for r in rows)
     # Entities expose a coalesced display_name (hgnc_symbol for genes).
     assert any(r.get("display_name") == "TP53" for r in rows)
+
+
+# --- Phase 3: layer-Z constants (pure — no DB) ------------------------------
+
+def test_five_layer_z():
+    # The five stacked omics/phenotype planes (ADR-0009). Disease shifted 900->1200.
+    assert models.GENE_LAYER_Z == 0
+    assert models.TRANSCRIPT_LAYER_Z == 300
+    assert models.PROTEIN_LAYER_Z == 600
+    assert models.METABOLITE_LAYER_Z == 900
+    assert models.DISEASE_LAYER_Z == 1200
+
+
+def test_layer_z_no_overlap():
+    # Regression vector (ADR-0009): the metabolomics shift must not collide with
+    # the phenotype plane; all five planes are distinct.
+    zs = [
+        models.GENE_LAYER_Z, models.TRANSCRIPT_LAYER_Z, models.PROTEIN_LAYER_Z,
+        models.METABOLITE_LAYER_Z, models.DISEASE_LAYER_Z,
+    ]
+    assert len(set(zs)) == len(zs)
+    assert models.METABOLITE_LAYER_Z != models.DISEASE_LAYER_Z
+
+
+# --- Phase 3: data-dependent gates ------------------------------------------
+# These skip (not fail) when the Phase-3 ETL has not been run on the live graph,
+# so the suite stays green pre-data while becoming a real gate once data lands.
+
+async def _count(session, cypher: str) -> int:
+    rec = await (await session.run(cypher)).single()
+    return rec[0] if rec else 0
+
+
+async def test_cancer_gene_flag(neo4j_session):
+    c = await _count(neo4j_session, "MATCH (g:Gene {cancer_gene: true}) RETURN count(g)")
+    if c == 0:
+        pytest.skip("COSMIC not loaded (12_cosmic) — no cancer_gene flags yet")
+    assert c > 0
+
+
+async def test_differentially_expressed_edges(neo4j_session):
+    c = await _count(
+        neo4j_session,
+        "MATCH (:Gene)-[r:DIFFERENTIALLY_EXPRESSED]->(:Disease) RETURN count(r)",
+    )
+    if c == 0:
+        pytest.skip("TCGA not loaded (13_tcga) — no DIFFERENTIALLY_EXPRESSED edges yet")
+    assert c > 0
+
+
+async def test_metabolite_nodes(neo4j_session):
+    c = await _count(neo4j_session, "MATCH (m:Metabolite) RETURN count(m)")
+    if c == 0:
+        pytest.skip("Recon3D not loaded (14_metabolomics) — no Metabolite nodes yet")
+    assert c > 0
+
+
+async def test_catalyses_edges(neo4j_session):
+    c = await _count(neo4j_session, "MATCH ()-[r:CATALYSES]->() RETURN count(r)")
+    if c == 0:
+        pytest.skip("Recon3D not loaded (14_metabolomics) — no CATALYSES edges yet")
+    assert c > 0
+
+
+async def test_metabolite_traversal(neo4j_session):
+    rows = await (
+        await neo4j_session.run(
+            "MATCH (m:Metabolite) RETURN coalesce(m.hmdb_id, m.chebi_id) AS id LIMIT 1"
+        )
+    ).data()
+    if not rows or not rows[0]["id"]:
+        pytest.skip("Recon3D not loaded (14_metabolomics) — no Metabolite to seed")
+    sub = await get_metabolite_neighborhood(rows[0]["id"])
+    assert len(sub["nodes"]) > 0
+    assert any(n["kind"] == "metabolite" for n in sub["nodes"])
+
+
+async def test_backbone_surfaces_seed_metabolites(neo4j_session):
+    # ADR-0011: an enzyme/metabolic-gene seed must surface its OWN metabolites via the
+    # backbone pre-pass (gene -> protein -> CATALYSES -> metabolite), even though the
+    # regulatory/variant fan-out would otherwise fill the node budget before the deep
+    # vertical chain is ever discovered.
+    rows = await (
+        await neo4j_session.run(
+            "MATCH (g:Gene)-[:ENCODES|PRODUCES|TRANSLATES_TO*1..2]->"
+            "(:Protein)-[:CATALYSES]->(:Metabolite) "
+            "RETURN g.ensembl_id AS eid LIMIT 1"
+        )
+    ).data()
+    if not rows or not rows[0]["eid"]:
+        pytest.skip("proteome/Recon3D not loaded — no enzyme gene to seed")
+    raw = await signal_decay_subgraph([rows[0]["eid"]])
+    kinds = {n["kind"] for n in raw["nodes"]}
+    assert "metabolite" in kinds, (
+        "enzyme-gene seed must surface its backbone metabolites (ADR-0011)"
+    )
+
+
+async def test_tcga_traversal():
+    rows = await get_gene_cancer_associations("TP53")
+    if not rows:
+        pytest.skip("TCGA not loaded (13_tcga) — TP53 has no DIFFERENTIALLY_EXPRESSED edges")
+    assert len(rows) >= 1
+    assert "tumor_type" in rows[0] and "efo_id" in rows[0]

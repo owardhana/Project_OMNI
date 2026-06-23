@@ -53,14 +53,26 @@ class Settings(BaseSettings):
     # call returns a bounded, legible subgraph.
     TRAVERSAL_DECAY: float = 0.7  # global per-hop decay (d)
     TRAVERSAL_MIN_SIGNAL: float = 0.05  # signal floor (epsilon)
-    TRAVERSAL_MAX_NODES: int = 150  # hard cap (guardrail)
+    TRAVERSAL_MAX_NODES: int = 300  # hard cap (guardrail); raised 150->300 (ADR-0010
+    # full proteome) so a gene seed has budget to reach proteins + metabolites, not
+    # just regulated genes.
     PRODUCES_CONDUCTANCE: float = 0.9  # structural; tissue is NOT in conductance (ADR-0006)
     STRUCTURAL_CONDUCTANCE: float = 1.0  # TRANSLATES_TO / ENCODES
 
-    # Phase 2 tunable scaling parameters (see 06_data_vision.md). All env-driven —
+    # Phase 2 tunable scaling parameters (see docs/data-architecture.md). All env-driven —
     # never hardcode thresholds in ETL or traversal code.
-    STRING_MIN_CONFIDENCE: float = 0.9  # STRING PPI combined_score threshold (~50k edges)
+    STRING_MIN_CONFIDENCE: float = 0.95  # STRING PPI combined_score threshold (~101k edges, full proteome)
     STRING_MAX_EXPAND_PER_NODE: int = 10  # max INTERACTS_WITH neighbours per frontier step
+    # REGULATES is now dense-capped too (a hub TF regulates hundreds of genes and was
+    # flooding gene-seeded views, starving the molecular backbone). Higher than the
+    # STRING cap so the regulatory story still reads; top-k by DoRothEA confidence.
+    REGULATES_MAX_EXPAND_PER_NODE: int = 25  # max REGULATES neighbours per frontier step
+    # Backbone-guaranteed traversal (ADR-0011). The seed's own vertical chain (gene
+    # -> transcript -> protein -> CATALYSES -> metabolite) is pinned via a pre-pass so
+    # deep layers survive the breadth fan-out. This caps how many metabolites a single
+    # pinned protein contributes (ranked deterministically by metabolite key) — guards
+    # against a promiscuous enzyme pinning hundreds of nodes past max_nodes.
+    BACKBONE_MAX_METABOLITES_PER_PROTEIN: int = 25
     GWAS_MIN_SIGNIFICANCE: float = 5e-8  # GWAS p-value cutoff (genome-wide significance)
     EMBEDDING_AGENT_BATCH_SIZE: int = 50  # nodes per embedding agent run
     EMBEDDING_AGENT_CRON_HOUR: int = 1  # 1am UTC (after citation agent at midnight)

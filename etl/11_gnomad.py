@@ -1,6 +1,6 @@
 """ETL 11 — Enrich Gene nodes with gnomAD loss-of-function intolerance (pLI).
 
-Bulk-file enrichment (06_data_vision.md Pattern 1). Reads the gnomAD v4 gene
+Bulk-file enrichment (docs/data-architecture.md Pattern 1). Reads the gnomAD v4 gene
 constraint metrics and SETs ``pli_score`` on Gene nodes (matched by hgnc_symbol).
 The constraint file has one row per transcript; we prefer the MANE Select
 transcript's ``lof.pLI`` for the gene-level score, falling back to the first

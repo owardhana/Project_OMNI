@@ -52,8 +52,8 @@ DoRothEA high-confidence tier sizes in this release:
 | A+B+C     | 13,223 |
 | A+B+C+D   | 29,086 |
 
-**No principled cutoff reaches the spec's `>30,000` (or 02_mvp's `>50,000`)**, so
-that gate is a spec error, not an ETL bug. 02_mvp.md Known Risks already
+**No principled cutoff reaches the spec's `>30,000` (or the MVP spec's `>50,000`)**, so
+that gate is a spec error, not an ETL bug. [vision-and-mvp.md](../vision-and-mvp.md) (Known risks) already
 pre-authorizes tier expansion ("Add B-tier, lower threshold if needed").
 
 We **ship A-B** because the benchmark genes have ample regulators under A-B:

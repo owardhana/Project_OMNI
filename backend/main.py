@@ -17,7 +17,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.agents.citation_agent import citation_agent
 from backend.agents.embedding_agent import embedding_agent
-from backend.api.routes import admin, genes, graph, query, search, transcripts
+from backend.api.routes import (
+    admin, genes, graph, metabolites, query, search, transcripts,
+)
 from backend.config import settings
 from backend.db.neo4j_client import close_driver, create_indexes
 from backend.llm.prompts.text2cypher import ensure_schema_cached
@@ -62,6 +64,7 @@ app.add_middleware(
 
 app.include_router(genes.router)
 app.include_router(graph.router)
+app.include_router(metabolites.router)
 app.include_router(transcripts.router)
 app.include_router(search.router)
 app.include_router(query.router)

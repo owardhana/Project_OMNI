@@ -11,13 +11,17 @@ from typing import Annotated, Literal, Optional, Union
 from pydantic import BaseModel, Field
 
 # Z position per omics layer (graphite model): genomics=0, transcriptomics=300,
-# proteomics=600 (ADR-0004), phenotype=900 (ADR-0007 — the 4th layer). Variants
-# sit in the genomics layer alongside genes. Frontend uses its own layer coords;
-# this is metadata.
+# proteomics=600 (ADR-0004), metabolomics=900 (ADR-0009 — the 4th layer),
+# phenotype=1200 (Disease, shifted up from 900 by ADR-0009 — now the 5th layer).
+# Variants sit in the genomics layer alongside genes; metabolites get their own
+# plane between proteomics and phenotype. Frontend uses its own layer coords; this
+# is metadata. The 900 -> 1200 Disease shift is the ADR-0009 regression vector —
+# any hardcoded 900 not routed through DISEASE_LAYER_Z breaks silently.
 GENE_LAYER_Z = 0
 TRANSCRIPT_LAYER_Z = 300
 PROTEIN_LAYER_Z = 600
-DISEASE_LAYER_Z = 900
+METABOLITE_LAYER_Z = 900  # ADR-0009 — metabolomics, between proteomics and phenotype
+DISEASE_LAYER_Z = 1200  # ADR-0009 — phenotype, shifted up from 900
 
 
 class GeneNode(BaseModel):
@@ -80,11 +84,22 @@ class DiseaseNode(BaseModel):
     category: Optional[str] = None
     description: Optional[str] = None
     node_type: Literal["disease"] = "disease"
-    layer_z: int = DISEASE_LAYER_Z  # phenotype layer (above proteomics)
+    layer_z: int = DISEASE_LAYER_Z  # phenotype layer (above metabolomics, ADR-0009)
+
+
+class MetaboliteNode(BaseModel):
+    id: str  # hmdb_id (primary) or chebi_id (fallback) — ADR-0009
+    hmdb_id: Optional[str] = None
+    chebi_id: Optional[str] = None
+    name: Optional[str] = None
+    formula: Optional[str] = None
+    charge: Optional[int] = None
+    node_type: Literal["metabolite"] = "metabolite"
+    layer_z: int = METABOLITE_LAYER_Z  # metabolomics layer (above proteomics)
 
 
 GraphNode = Annotated[
-    Union[GeneNode, TranscriptNode, ProteinNode, VariantNode, DiseaseNode],
+    Union[GeneNode, TranscriptNode, ProteinNode, VariantNode, DiseaseNode, MetaboliteNode],
     Field(discriminator="node_type"),
 ]
 
@@ -94,7 +109,9 @@ class GraphEdge(BaseModel):
     source: str
     target: str
     rel_type: str  # REGULATES | PRODUCES | TRANSLATES_TO | ENCODES |
-    #                INTERACTS_WITH | ASSOCIATED_WITH | IN_GENE | IMPLICATED_IN
+    #                INTERACTS_WITH | ASSOCIATED_WITH | IN_GENE | IMPLICATED_IN |
+    #                DIFFERENTIALLY_EXPRESSED (Gene->Disease, TCGA) |
+    #                CATALYSES (Protein->Metabolite, Recon3D)
     mode: Optional[str] = None
     confidence: Optional[float] = None
     confidence_tier: Optional[str] = None
@@ -105,6 +122,12 @@ class GraphEdge(BaseModel):
     coexpression_score: Optional[float] = None
     p_value: Optional[float] = None  # ASSOCIATED_WITH (GWAS)
     consequence_type: Optional[str] = None  # IN_GENE
+    # Phase 3 edge attributes (docs/data-architecture.md).
+    log2fc: Optional[float] = None  # DIFFERENTIALLY_EXPRESSED (TCGA)
+    direction: Optional[str] = None  # "up" | "down"
+    tumor_type: Optional[str] = None  # TCGA cancer code (e.g. "LUAD")
+    role: Optional[str] = None  # CATALYSES: "substrate" | "product"
+    reaction_id: Optional[str] = None  # CATALYSES: Recon3D reaction ID
     source_db: Optional[str] = None
     pmids: list[str] = Field(default_factory=list)
     citation_attempted: bool = False
@@ -138,8 +161,8 @@ class PathResponse(BaseModel):
 
 
 class SearchResult(BaseModel):
-    id: str  # ensembl_id | ensembl_tx_id | uniprot_id | ontology_id
-    node_type: str  # gene | transcript | protein | disease
+    id: str  # ensembl_id | ensembl_tx_id | uniprot_id | ontology_id | hmdb_id
+    node_type: str  # gene | transcript | protein | disease | metabolite
     hgnc_symbol: Optional[str] = None
     name: Optional[str] = None  # disease display name
     description: Optional[str] = None
@@ -175,6 +198,11 @@ class EdgeDetail(BaseModel):
     coexpression_score: Optional[float] = None
     p_value: Optional[float] = None
     consequence_type: Optional[str] = None
+    log2fc: Optional[float] = None  # DIFFERENTIALLY_EXPRESSED (TCGA)
+    direction: Optional[str] = None
+    tumor_type: Optional[str] = None
+    role: Optional[str] = None  # CATALYSES
+    reaction_id: Optional[str] = None
     source_db: Optional[str] = None
     pmids: list[str] = Field(default_factory=list)
     citation_attempted: bool = False
@@ -270,6 +298,21 @@ def disease_node_from_props(props: dict) -> DiseaseNode:
     )
 
 
+def metabolite_node_from_props(props: dict) -> MetaboliteNode:
+    # Canonical key is hmdb_id (primary) with chebi_id fallback (ADR-0009).
+    hmdb_id = props.get("hmdb_id")
+    chebi_id = props.get("chebi_id")
+    key = hmdb_id if hmdb_id is not None else (chebi_id or props.get("id", ""))
+    return MetaboliteNode(
+        id=key,
+        hmdb_id=hmdb_id,
+        chebi_id=chebi_id,
+        name=props.get("name"),
+        formula=props.get("formula"),
+        charge=props.get("charge"),
+    )
+
+
 def edge_from_raw(raw_edge: dict, tissues: list[str]) -> GraphEdge:
     props = raw_edge["props"]
     rel_type = raw_edge["rel_type"]
@@ -290,6 +333,11 @@ def edge_from_raw(raw_edge: dict, tissues: list[str]) -> GraphEdge:
         coexpression_score=props.get("coexpression_score"),
         p_value=props.get("p_value"),
         consequence_type=props.get("consequence_type"),
+        log2fc=props.get("log2fc"),
+        direction=props.get("direction"),
+        tumor_type=props.get("tumor_type"),
+        role=props.get("role"),
+        reaction_id=props.get("reaction_id"),
         source_db=props.get("source_db"),
         pmids=_coerce_pmids(props.get("pmids")),
         citation_attempted=bool(props.get("citation_attempted", False)),
@@ -300,6 +348,7 @@ _NODE_BUILDERS = {
     "protein": protein_node_from_props,
     "variant": variant_node_from_props,
     "disease": disease_node_from_props,
+    "metabolite": metabolite_node_from_props,
     "transcript": transcript_node_from_props,
 }
 
@@ -336,6 +385,11 @@ def edge_detail_from_raw(raw_edge: dict, tissues: list[str]) -> EdgeDetail:
         coexpression_score=props.get("coexpression_score"),
         p_value=props.get("p_value"),
         consequence_type=props.get("consequence_type"),
+        log2fc=props.get("log2fc"),
+        direction=props.get("direction"),
+        tumor_type=props.get("tumor_type"),
+        role=props.get("role"),
+        reaction_id=props.get("reaction_id"),
         source_db=props.get("source_db"),
         pmids=_coerce_pmids(props.get("pmids")),
         citation_attempted=bool(props.get("citation_attempted", False)),

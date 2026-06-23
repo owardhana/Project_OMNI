@@ -182,6 +182,11 @@
   accent-color: var(--active);
   cursor: pointer;
 }
+.layer-swatch-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
 .layer-swatch {
   width: 10px;
   height: 10px;
@@ -189,44 +194,119 @@
   display: inline-block;
 }
 
-/* ---- status + legend ---- */
-.status-line {
+/* ---- Phase 8c: bottom status bar ---- */
+.status-bar {
   position: absolute;
-  bottom: 14px;
-  left: 20px;
-  font-size: 12px;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px;
+  font-size: 11px;
   color: var(--text-faint);
-  z-index: 10;
+  background: var(--panel-glass);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  border-top: 1px solid var(--border);
+  z-index: 18;
   font-variant-numeric: tabular-nums;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
 }
-.status-error {
-  color: #f87171;
+.status-metric,
+.status-metric strong { font-family: var(--mono); color: var(--text-muted); }
+.status-seed {
+  font-family: var(--mono);
+  color: var(--text-muted);
+  max-width: 38vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
+.status-spacer { flex: 1; }
+.status-cam {
+  font-family: var(--mono);
+  letter-spacing: 0.08em;
+  padding: 1px 7px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+}
+.status-cam.fly { color: #b45309; border-color: #f59e0b; }
+
+/* skeleton shimmer (replaces text spinners) */
+.skeleton-line {
+  display: inline-block;
+  width: 130px;
+  height: 10px;
+  border-radius: 5px;
+  background: linear-gradient(90deg, var(--border) 25%, var(--panel-hover) 37%, var(--border) 63%);
+  background-size: 400% 100%;
+  animation: shimmer 1.3s ease-in-out infinite;
+}
+@keyframes shimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: 0 0; }
+}
+
+/* ---- Phase 8c: collapsible dynamic legend (bottom-right, above the query
+   toggle which sits at bottom:28px) ---- */
 .legend {
   position: absolute;
-  bottom: 12px;
-  left: 50%;
-  transform: translateX(-50%);
+  bottom: 84px;
+  right: 18px;
   display: flex;
-  gap: 18px;
+  flex-direction: column;
+  gap: 6px;
   font-size: 12px;
   color: var(--text);
   border-radius: 10px;
-  padding: 8px 16px;
-  z-index: 10;
+  padding: 8px 12px;
+  background: var(--panel-glass);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--border);
+  box-shadow: 0 6px 20px -10px rgba(0, 0, 0, 0.45);
+  z-index: 12;
+  max-width: 230px;
 }
-.legend .dot {
+.legend-collapsed { padding: 4px 10px; }
+.legend-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  background: none;
+  border: none;
+  color: var(--text);
+  font-weight: 600;
+  font-size: 12px;
+  cursor: pointer;
+}
+.legend-caret { color: var(--text-muted); }
+.legend-body { display: flex; flex-direction: column; gap: 8px; }
+.legend-group { display: flex; flex-wrap: wrap; gap: 6px 12px; }
+.legend-edges { border-top: 1px solid var(--border); padding-top: 6px; }
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.dot {
   display: inline-block;
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  margin-right: 6px;
-  vertical-align: -1px;
 }
-.dot.protein { background: var(--protein); }
-.dot.gene { background: var(--gene); }
-.dot.transcript { background: var(--transcript); }
+.edge-swatch {
+  display: inline-block;
+  width: 12px;
+  height: 3px;
+  border-radius: 2px;
+}
 
 /* ---- node detail panel ---- */
 .node-panel {
@@ -389,7 +469,7 @@
 /* ---- query panel ---- */
 .query-panel {
   position: absolute;
-  bottom: 0;
+  bottom: 28px; /* above the Phase-8c status bar */
   right: 20px;
   width: 480px;
   max-width: calc(100vw - 40px);
@@ -507,9 +587,11 @@
 .type-transcript { background: #60a5fa; }
 .type-protein { background: #c084fc; }
 .type-variant { background: #2dd4bf; }
+.type-metabolite { background: #fb923c; }
 .type-disease { background: #f472b6; }
 
 .dot.variant { background: #2dd4bf; }
+.dot.metabolite { background: #fb923c; }
 .dot.disease { background: #f472b6; }
 
 .flag-chip {
@@ -646,3 +728,172 @@
 }
 .banner-btn { font-size: 11px; padding: 3px 8px; border-radius: 4px; border: 1px solid #f472b6; background: transparent; color: #f472b6; cursor: pointer; }
 .path-note { color: #fb923c; }
+
+/* ====================================================================== */
+/* Phase 8c — UI polish                                                    */
+/* ====================================================================== */
+
+/* Frosted glass on the four detail/browser panels (appended last so it wins
+   over the earlier solid .entity-browser background). Light translucency keeps
+   the existing dark-on-light text readable; see PHASE3_PROGRESS.md. */
+.node-panel,
+.edge-panel,
+.query-body,
+.query-toggle,
+.entity-browser {
+  background: var(--panel-glass);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+
+/* Monospace IDs / metrics (JetBrains Mono via index.html). */
+.node-subtitle,
+.cypher-code { font-family: var(--mono); }
+
+/* ---- node hover tooltip (3D viewer) ---- */
+.node-tooltip {
+  position: fixed;
+  pointer-events: none;
+  z-index: 40;
+  min-width: 120px;
+  max-width: 210px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--panel-glass);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--border);
+  box-shadow: 0 8px 24px -10px rgba(0, 0, 0, 0.5);
+  color: var(--text);
+}
+.node-tooltip-name { font-weight: 600; font-size: 13px; margin-bottom: 5px; }
+.node-tooltip-chips { display: flex; gap: 5px; align-items: center; }
+.layer-chip {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 5px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+.node-tooltip-metric { margin-top: 5px; font-size: 11px; color: var(--text-muted); font-family: var(--mono); }
+
+/* ---- error banner (top of the affected area) ---- */
+.error-banner {
+  position: absolute;
+  top: 64px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 60vw;
+  padding: 9px 14px;
+  border-radius: 8px;
+  background: rgba(192, 57, 43, 0.12);
+  border: 1px solid #c0392b;
+  color: #c0392b;
+  font-size: 13px;
+  z-index: 28;
+}
+.error-icon { font-size: 14px; }
+
+/* ---- '?' shortcuts overlay ---- */
+.shortcuts-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(10, 10, 12, 0.45);
+  z-index: 50;
+  animation: fadeIn 0.12s ease-out;
+}
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+.shortcuts-card {
+  position: relative;
+  width: 360px;
+  max-width: 90vw;
+  padding: 20px;
+  border-radius: 14px;
+  background: var(--panel-glass);
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
+  border: 1px solid var(--border);
+  box-shadow: 0 20px 60px -20px rgba(0, 0, 0, 0.6);
+}
+.shortcuts-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; font-size: 15px; }
+.shortcuts-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 9px; }
+.shortcuts-list li { display: flex; align-items: center; gap: 12px; font-size: 13px; color: var(--text); }
+.kbd {
+  font-family: var(--mono);
+  font-size: 11px;
+  min-width: 26px;
+  text-align: center;
+  padding: 2px 7px;
+  border-radius: 5px;
+  background: var(--panel-hover);
+  border: 1px solid var(--border-strong);
+  box-shadow: 0 1px 0 var(--border-strong);
+  color: var(--text);
+}
+
+/* first-visit hint */
+.shortcut-hint {
+  position: absolute;
+  bottom: 40px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 12px;
+  color: var(--text);
+  background: var(--panel-glass);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 12px;
+  z-index: 14;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ---- entity browser refinements (pin selected, badge, pulse) ---- */
+.eb-row.selected { background: var(--panel-hover); }
+.eb-badge {
+  /* The handle is writing-mode: vertical-rl, so the badge flows BELOW the label;
+     a top margin (not left) gives it clearance so it doesn't clip the "R". */
+  margin-top: 6px;
+  font-size: 10px;
+  font-weight: 700;
+  background: var(--active);
+  color: var(--active-text);
+  border-radius: 999px;
+  padding: 0 6px;
+  min-width: 16px;
+  text-align: center;
+}
+.eb-load.has-selection { animation: pulse 1.4s ease-in-out infinite; }
+@keyframes pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(42, 42, 38, 0.0); }
+  50% { box-shadow: 0 0 0 4px rgba(42, 42, 38, 0.18); }
+}
+
+/* ---- search bar clear button ---- */
+.search-bar-input-wrap { position: relative; }
+.search-clear {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  color: var(--text-faint);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.search-clear:hover { color: var(--text); }
+.search-option.active { background: var(--panel-hover); }

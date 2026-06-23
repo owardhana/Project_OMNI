@@ -11,7 +11,7 @@ Data source reality (see docs/adr/0003-data-source-urls.md):
   - DoRothEA no longer ships a CSV; we read data/raw/dorothea_hs.rda via pyreadr.
   - Real columns are tf / confidence / target / mor (NO 'likelihood' column).
   - High-confidence tiers A+B total ~6.4k edges — the build prompt's ">30k" is a
-    miscalibrated figure; A+B is the principled, spec-mandated set (04_decisions).
+    miscalibrated figure; A+B is the principled, spec-mandated set (docs/vision-and-mvp.md).
 
 Confidence tiers come from DOROTHEA_MIN_CONFIDENCE (default 'A,B').
 

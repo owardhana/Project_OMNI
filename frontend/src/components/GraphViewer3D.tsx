@@ -22,6 +22,31 @@ interface Props {
   onBackgroundClick: () => void;
   onEdgeHover: (link: FGLink | null) => void;
   onEdgeClick: (link: FGLink | null) => void;
+  onCameraModeChange?: (mode: 'orbit' | 'fly') => void;
+}
+
+// One key metric per node kind for the hover tooltip (8c).
+function nodeMetric(n: FGNode): string | null {
+  if (n.node_type === 'gene')
+    return n.pli_score != null ? `pLI ${n.pli_score.toFixed(2)}` : null;
+  if (n.node_type === 'protein')
+    return n.molecular_weight != null ? `${n.molecular_weight} Da` : (n.subtype ?? null);
+  if (n.node_type === 'transcript')
+    return n.length_bp != null ? `${n.length_bp} bp` : null;
+  if (n.node_type === 'variant')
+    return n.clinical_significance ?? (n.cadd_score != null ? `CADD ${n.cadd_score}` : null);
+  if (n.node_type === 'metabolite') return n.formula ?? null;
+  if (n.node_type === 'disease') return n.category ?? null;
+  return null;
+}
+
+function nodeDisplayName(n: FGNode): string {
+  if (n.node_type === 'gene') return n.hgnc_symbol ?? n.ensembl_id;
+  if (n.node_type === 'protein') return n.hgnc_symbol ?? n.uniprot_id;
+  if (n.node_type === 'transcript') return n.hgnc_symbol ?? n.ensembl_tx_id;
+  if (n.node_type === 'variant') return n.rsid ?? n.id;
+  if (n.node_type === 'metabolite') return n.name ?? n.hmdb_id ?? n.id;
+  return n.name ?? n.ontology_id;
 }
 
 const PLANE_SIZE = 1400;
@@ -74,11 +99,20 @@ export default function GraphViewer3D({
   onBackgroundClick,
   onEdgeHover,
   onEdgeClick,
+  onCameraModeChange,
 }: Props) {
   const fgRef = useRef<any>(null);
   const planesRef = useRef<Record<string, THREE.Mesh>>({});
   const initRef = useRef(false);
   const [cameraMode, setCameraMode] = useState<'orbit' | 'fly'>('orbit');
+  const [hovered, setHovered] = useState<FGNode | null>(null);
+  const mouseRef = useRef({ x: 0, y: 0 });
+  const [tipPos, setTipPos] = useState({ x: 0, y: 0 });
+
+  // Report camera-mode changes up to the status bar (8c).
+  useEffect(() => {
+    onCameraModeChange?.(cameraMode);
+  }, [cameraMode, onCameraModeChange]);
   const flyRef = useRef<FlyControls | null>(null);
   const flyRafRef = useRef<number | null>(null);
   const flyClockRef = useRef<THREE.Clock | null>(null); // lazy: don't alloc per render
@@ -96,6 +130,16 @@ export default function GraphViewer3D({
     const onResize = () => setDims(measure());
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  // Track the cursor so the hover tooltip can float next to the hovered node
+  // (react-force-graph-3d's onNodeHover gives the node, not the screen point).
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      mouseRef.current = { x: e.clientX, y: e.clientY };
+    };
+    window.addEventListener('mousemove', onMove);
+    return () => window.removeEventListener('mousemove', onMove);
   }, []);
 
   // Press 'f'/'F' to toggle Orbit <-> Fly; Esc returns to Orbit. Ignore when
@@ -257,6 +301,8 @@ export default function GraphViewer3D({
           return `${n.hgnc_symbol ?? n.ensembl_tx_id} · Transcript`;
         if (n.node_type === 'variant')
           return `${n.rsid ?? n.id} · Variant${n.clinical_significance ? ' · ' + n.clinical_significance : ''}`;
+        if (n.node_type === 'metabolite')
+          return `${n.name ?? n.hmdb_id ?? n.id} · Metabolite${n.formula ? ' · ' + n.formula : ''}`;
         return `${n.name ?? n.ontology_id} · Disease`;
       }}
       nodeColor={(n: FGNode) => nodeColor(n)}
@@ -274,7 +320,15 @@ export default function GraphViewer3D({
       linkColor={(l: FGLink) => hexToRgba(edgeColor(l), linkAlpha(l, activeTissue))}
       linkOpacity={1}
       // INTERACTS_WITH (intra-layer PPI) renders thinner than inter-layer edges.
-      linkWidth={(l: FGLink) => (l.rel_type === 'INTERACTS_WITH' ? 0.8 * 0.6 : 0.8)}
+      // CATALYSES sits in the same weight tier; DIFFERENTIALLY_EXPRESSED reads
+      // thinnest (amber, cancer context — react-force-graph-3d has no linkDash,
+      // so colour+width carry the distinction per ADR-0009 / Phase-8 spec).
+      linkWidth={(l: FGLink) => {
+        if (l.rel_type === 'INTERACTS_WITH') return 0.8 * 0.6;
+        if (l.rel_type === 'CATALYSES') return 0.8 * 0.7;
+        if (l.rel_type === 'DIFFERENTIALLY_EXPRESSED') return 0.8 * 0.5;
+        return 0.8;
+      }}
       linkDirectionalArrowLength={2.8}
       linkDirectionalArrowRelPos={1}
       linkCurvature={0.12}
@@ -284,6 +338,10 @@ export default function GraphViewer3D({
       linkDirectionalParticleSpeed={0.0015}
       linkDirectionalParticleColor={(l: FGLink) => hexToRgba(edgeColor(l), 1)}
       onNodeClick={(n: FGNode) => onNodeClick(n)}
+      onNodeHover={(n: FGNode | null) => {
+        setHovered(n);
+        if (n) setTipPos({ x: mouseRef.current.x, y: mouseRef.current.y });
+      }}
       onBackgroundClick={() => onBackgroundClick()}
       onLinkHover={(l: FGLink | null) => onEdgeHover(l)}
       onLinkClick={(l: FGLink | null) => onEdgeClick(l)}
@@ -292,7 +350,7 @@ export default function GraphViewer3D({
       data-testid="camera-hud"
       style={{
         position: 'absolute',
-        bottom: 16,
+        bottom: 36,
         left: 16,
         fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
         fontSize: 11,
@@ -310,6 +368,26 @@ export default function GraphViewer3D({
         ? 'FLY MODE · WASD move · R/F up·down · drag look · C/Esc orbit'
         : 'ORBIT · press C to fly'}
     </div>
+    {hovered && (
+      <div
+        className="node-tooltip"
+        style={{
+          left: Math.min(tipPos.x + 14, dims.w - 220),
+          top: Math.min(tipPos.y + 14, dims.h - 90),
+        }}
+      >
+        <div className="node-tooltip-name">{nodeDisplayName(hovered)}</div>
+        <div className="node-tooltip-chips">
+          <span className={`type-chip type-${hovered.node_type}`}>
+            {hovered.node_type}
+          </span>
+          <span className="layer-chip">{nodeLayer(hovered)}</span>
+        </div>
+        {nodeMetric(hovered) && (
+          <div className="node-tooltip-metric">{nodeMetric(hovered)}</div>
+        )}
+      </div>
+    )}
     </>
   );
 }

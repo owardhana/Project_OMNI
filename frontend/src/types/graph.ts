@@ -61,12 +61,24 @@ export interface DiseaseNode {
   layer_z: number;
 }
 
+export interface MetaboliteNode {
+  id: string; // hmdb_id (primary) or chebi_id (fallback) — ADR-0009
+  hmdb_id?: string | null;
+  chebi_id?: string | null;
+  name?: string | null;
+  formula?: string | null;
+  charge?: number | null;
+  node_type: 'metabolite';
+  layer_z: number;
+}
+
 export type GraphNode =
   | GeneNode
   | TranscriptNode
   | ProteinNode
   | VariantNode
-  | DiseaseNode;
+  | DiseaseNode
+  | MetaboliteNode;
 
 export type RelType =
   | 'REGULATES'
@@ -76,7 +88,9 @@ export type RelType =
   | 'INTERACTS_WITH'
   | 'ASSOCIATED_WITH'
   | 'IN_GENE'
-  | 'IMPLICATED_IN';
+  | 'IMPLICATED_IN'
+  | 'DIFFERENTIALLY_EXPRESSED'
+  | 'CATALYSES';
 
 export interface GraphEdge {
   id: string;
@@ -92,6 +106,12 @@ export interface GraphEdge {
   coexpression_score?: number | null;
   p_value?: number | null;
   consequence_type?: string | null;
+  // Phase 3 edge attributes (docs/data-architecture.md).
+  log2fc?: number | null; // DIFFERENTIALLY_EXPRESSED (TCGA)
+  direction?: string | null; // 'up' | 'down'
+  tumor_type?: string | null; // TCGA cancer code
+  role?: string | null; // CATALYSES: 'substrate' | 'product'
+  reaction_id?: string | null; // CATALYSES: Recon3D reaction id
   source_db?: string | null;
   pmids: string[];
   citation_attempted: boolean;
@@ -113,7 +133,7 @@ export interface GraphWarning {
 
 export interface SearchResult {
   id: string;
-  node_type: 'gene' | 'transcript' | 'protein' | 'variant' | 'disease';
+  node_type: 'gene' | 'transcript' | 'protein' | 'variant' | 'disease' | 'metabolite';
   hgnc_symbol?: string | null;
   name?: string | null;
   description?: string | null;

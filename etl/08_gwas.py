@@ -1,6 +1,6 @@
 """ETL 08 — GWAS Catalog: Variant + Disease nodes and their associations.
 
-Topology from a bulk file (06_data_vision.md Pattern 1). Reads the GWAS Catalog
+Topology from a bulk file (docs/data-architecture.md Pattern 1). Reads the GWAS Catalog
 ontology-annotated full associations (a zip downloaded by 00_download.sh), keeps
 genome-wide-significant hits, and MERGEs:
   - (:Disease {ontology_id})           from MAPPED_TRAIT_URI / MAPPED_TRAIT

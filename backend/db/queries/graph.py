@@ -42,16 +42,17 @@ async def search_nodes(query: str, limit: int = 10) -> list[dict]:
            WHEN 'Gene' IN lbls THEN 'gene'
            WHEN 'Disease' IN lbls THEN 'disease'
            WHEN 'Protein' IN lbls THEN 'protein'
+           WHEN 'Metabolite' IN lbls THEN 'metabolite'
            WHEN 'Transcript' IN lbls THEN 'transcript'
            ELSE 'unknown'
          END AS node_type
     WITH node, score, node_type,
          CASE WHEN node_type = 'gene'
-              THEN (EXISTS { (node)-[:ENCODES]->(:Protein) }
-                    OR EXISTS { (node)-[:PRODUCES]->(:Transcript)-[:TRANSLATES_TO]->(:Protein) })
-              ELSE false END AS is_tf
+              THEN (EXISTS { (node)-[:ENCODES]->(:Protein {subtype: 'transcription_factor'}) }
+                    OR EXISTS { (node)-[:PRODUCES]->(:Transcript)-[:TRANSLATES_TO]->(:Protein {subtype: 'transcription_factor'}) })
+              ELSE false END AS is_tf  // subtype filter REQUIRED post-ADR-0010 (full proteome)
     RETURN node_type,
-           coalesce(node.ensembl_id, node.uniprot_id, node.ontology_id, node.ensembl_tx_id) AS id,
+           coalesce(node.ensembl_id, node.uniprot_id, node.ontology_id, node.ensembl_tx_id, node.hmdb_id, node.chebi_id) AS id,
            node.ensembl_id AS ensembl_id,
            node.hgnc_symbol AS hgnc_symbol,
            node.name AS name,
@@ -85,6 +86,7 @@ WITH node, score,
        WHEN 'Gene' IN lbls THEN 'gene'
        WHEN 'Disease' IN lbls THEN 'disease'
        WHEN 'Protein' IN lbls THEN 'protein'
+       WHEN 'Metabolite' IN lbls THEN 'metabolite'
        WHEN 'Transcript' IN lbls THEN 'transcript'
        ELSE 'other'
      END AS node_type
@@ -93,8 +95,8 @@ WHERE (size($types) = 0 OR node_type IN $types)
   AND ($biotype IS NULL OR node.biotype = $biotype)
   AND ($pli IS NULL OR (node_type = 'gene' AND node.pli_score >= $pli))
 RETURN node_type,
-       coalesce(node.ensembl_id, node.uniprot_id, node.ontology_id, node.ensembl_tx_id) AS id,
-       coalesce(node.hgnc_symbol, node.name, node.ensembl_id, node.uniprot_id, node.ontology_id) AS display_name,
+       coalesce(node.ensembl_id, node.uniprot_id, node.ontology_id, node.ensembl_tx_id, node.hmdb_id, node.chebi_id) AS id,
+       coalesce(node.hgnc_symbol, node.name, node.ensembl_id, node.uniprot_id, node.ontology_id, node.hmdb_id, node.chebi_id) AS display_name,
        node.description AS description,
        CASE WHEN toUpper(coalesce(node.hgnc_symbol, '')) = toUpper($exact)
             THEN 1 ELSE 0 END AS exact_boost,
@@ -125,7 +127,7 @@ async def search_entities(
     (they aren't in the fulltext index); all other labels via node_search."""
     text = (q or "").strip()
     want = lambda t: not types or t in types  # noqa: E731
-    fulltext_types = {"gene", "protein", "disease", "transcript"}
+    fulltext_types = {"gene", "protein", "disease", "transcript", "metabolite"}
     items: list[dict] = []
     async with get_session() as session:
         lucene = _build_lucene_query(text) if text else None

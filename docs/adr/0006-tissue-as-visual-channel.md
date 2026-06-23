@@ -12,7 +12,7 @@ graph only via `PRODUCES`, selecting a specific tissue makes transcripts
 
 Three problems:
 
-1. **Diverges from spec.** 02_mvp.md and 04_decisions.md always defined the tissue
+1. **Diverges from spec.** [vision-and-mvp.md](../vision-and-mvp.md) always defined the tissue
    filter as **edge opacity** (dim below threshold, all data loaded), never removal.
 2. **The threshold is biologically too aggressive.** `tw = TPM / p99(tissue)`
    clipped to [0,1] (`etl/03_gtex.py`). The 99th percentile is dominated by

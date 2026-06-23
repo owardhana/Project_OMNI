@@ -1,6 +1,6 @@
 """ETL 09 — Enrich existing Variant nodes with ClinVar clinical significance.
 
-Bulk-file enrichment (06_data_vision.md Pattern 1). Reads the ClinVar variant
+Bulk-file enrichment (docs/data-architecture.md Pattern 1). Reads the ClinVar variant
 summary, keeps GRCh38 rows, and SETs ``clinical_significance`` on Variant nodes
 that already exist in the graph (matched by rsid). It never mints Variant nodes —
 ClinVar entries with no matching graph variant are skipped and counted.

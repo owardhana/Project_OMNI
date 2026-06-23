@@ -4,7 +4,7 @@ Status: Accepted (2026-06-15)
 
 ## Context
 
-04_decisions.md and the build prompt specify these model IDs:
+[vision-and-mvp.md](../vision-and-mvp.md) and the build prompt specify these model IDs:
 
 - Text2Cypher / synthesis: `anthropic/claude-sonnet-4-6`
 - Citation relevance check: `anthropic/claude-haiku-4-5-20251001`

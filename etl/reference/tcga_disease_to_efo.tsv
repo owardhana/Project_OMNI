@@ -1,0 +1,58 @@
+# TCGA Pan-Cancer (Xena) study name -> disease ontology id crosswalk.
+#
+# WHY THIS FILE EXISTS
+# The Toil/Xena expression matrix (tcga_RSEM_gene_fpkm.gz) joins to
+# TCGA_phenotype_denseDataOnlyDownload, whose `_primary_disease` column carries the
+# long TCGA *study name* (e.g. "breast invasive carcinoma"), NOT the acronym. The
+# Open Targets cttv `cancer2EFO_mappings.tsv` is keyed on the TCGA *acronym* and
+# maps to EFO/MONDO ids that are mostly EFO synonym terms — only 4/33 of those ids
+# are actually present in THIS graph's Disease set (the disease layer was imported
+# from efo.json, which is MONDO-heavy). So a cttv-sourced mapping yields almost no
+# DIFFERENTIALLY_EXPRESSED edges.
+#
+# This crosswalk therefore maps each of the 33 TCGA study names directly to the
+# ontology id that EXISTS as a :Disease node in this graph (verified by name against
+# the live graph, hand-curated — NOT runtime fuzzy-matched, which would silently
+# mis-map). The `tcga_code` and `graph_node_name` columns record provenance. Rows
+# whose closest term is a parent are flagged; 5 cohorts (ACC/MESO/PCPG/SARC/THYM)
+# have no malignant node in the graph at all and are listed with their cttv id so
+# the intent is documented — 13_tcga.py skips any ontology id absent from the graph.
+#
+# Reference data (same class as the cttv file it was derived from), NOT a tunable
+# parameter. Coverage: 28/33 cohorts resolve to a present Disease node.
+# Columns: primary_disease<TAB>tcga_code<TAB>ontology_id<TAB>graph_node_name
+# `primary_disease` is matched case-insensitively against phenotype._primary_disease.
+primary_disease	tcga_code	ontology_id	graph_node_name
+acute myeloid leukemia	LAML	MONDO_0018874	acute myeloid leukemia
+adrenocortical cancer	ACC	EFO_1000796	ABSENT-in-graph (cttv id; skipped at load)
+bladder urothelial carcinoma	BLCA	MONDO_0004986	urinary bladder carcinoma
+brain lower grade glioma	LGG	MONDO_0021042	glioma
+breast invasive carcinoma	BRCA	MONDO_0004989	breast carcinoma
+cervical & endocervical cancer	CESC	MONDO_0005131	cervical carcinoma
+cholangiocarcinoma	CHOL	MONDO_0019087	cholangiocarcinoma
+colon adenocarcinoma	COAD	MONDO_0002032	colon carcinoma
+diffuse large b-cell lymphoma	DLBC	MONDO_0018905	diffuse large B-cell lymphoma
+esophageal carcinoma	ESCA	MONDO_0019086	carcinoma of esophagus
+glioblastoma multiforme	GBM	MONDO_0018177	glioblastoma
+head & neck squamous cell carcinoma	HNSC	MONDO_0010150	head and neck squamous cell carcinoma
+kidney chromophobe	KICH	MONDO_0002367	kidney cancer (PARENT - no chromophobe-specific node)
+kidney clear cell carcinoma	KIRC	MONDO_0005005	clear cell renal carcinoma
+kidney papillary cell carcinoma	KIRP	MONDO_0017884	papillary renal cell carcinoma
+liver hepatocellular carcinoma	LIHC	MONDO_0007256	hepatocellular carcinoma
+lung adenocarcinoma	LUAD	MONDO_0005061	lung adenocarcinoma
+lung squamous cell carcinoma	LUSC	MONDO_0005097	squamous cell lung carcinoma
+mesothelioma	MESO	EFO_0000588	ABSENT-in-graph (cttv id; skipped at load)
+ovarian serous cystadenocarcinoma	OV	MONDO_0005140	ovarian carcinoma
+pancreatic adenocarcinoma	PAAD	MONDO_0005192	exocrine pancreatic carcinoma
+pheochromocytoma & paraganglioma	PCPG	EFO_0020005	ABSENT-in-graph (cttv id; skipped at load)
+prostate adenocarcinoma	PRAD	MONDO_0005159	prostate carcinoma
+rectum adenocarcinoma	READ	MONDO_0006519	rectal cancer
+sarcoma	SARC	EFO_0000691	ABSENT-in-graph (cttv id; skipped at load)
+skin cutaneous melanoma	SKCM	MONDO_0005012	cutaneous melanoma
+stomach adenocarcinoma	STAD	MONDO_0005036	gastric adenocarcinoma
+testicular germ cell tumor	TGCT	MONDO_0010108	testicular germ cell tumor
+thymoma	THYM	EFO_1000576	ABSENT-in-graph (cttv id; skipped at load)
+thyroid carcinoma	THCA	MONDO_0002108	thyroid cancer
+uterine carcinosarcoma	UCS	MONDO_0002715	uterine cancer (PARENT - no carcinosarcoma node)
+uterine corpus endometrioid carcinoma	UCEC	MONDO_0002447	endometrial carcinoma
+uveal melanoma	UVM	MONDO_0006486	uveal melanoma

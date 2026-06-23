@@ -27,11 +27,16 @@ _ETL_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_ETL_DIR))
 from utils.neo4j_client import close_driver, get_session  # noqa: E402
 
-# Load order (06_data_vision.md). Existing MVP topology first, then Phase 2.
+# Load order (docs/data-architecture.md). Existing MVP topology first, then Phase 2.
 ORDER = [
     "01_hgnc", "02_gencode", "03_gtex", "05_proteins", "04_dorothea",
     "06_uniprot_enrich", "07_string", "08_gwas", "09_clinvar",
     "10_ncbi_summaries", "11_gnomad",
+    # --- Phase 3 (docs/data-architecture.md) ---
+    # 05_proteins now mints the FULL proteome (ADR-0010), so 07_string builds PPI
+    # over the whole proteome and 14_metabolomics' CATALYSES connects. STRING's
+    # threshold is raised (STRING_MIN_CONFIDENCE=0.95) to keep INTERACTS_WITH sane.
+    "12_cosmic", "13_tcga", "14_metabolomics",
 ]
 
 # A step is aborted if a prerequisite that runs EARLIER in ORDER failed in this
@@ -44,6 +49,11 @@ BLOCKING: dict[str, set[str]] = {
     "09_clinvar": {"08_gwas"},
     "10_ncbi_summaries": {"01_hgnc"},
     "11_gnomad": {"01_hgnc"},
+    # Phase 3: COSMIC enriches existing genes; TCGA needs Gene + Disease nodes;
+    # metabolomics needs Protein + Gene nodes for the CATALYSES mapping.
+    "12_cosmic": {"01_hgnc"},
+    "13_tcga": {"01_hgnc", "08_gwas"},
+    "14_metabolomics": {"01_hgnc", "05_proteins"},
 }
 
 
