@@ -191,10 +191,13 @@ a DoRothEA REGULATES edge. **Key:** `uniprot_id` (e.g. `P04637`).
 | `chromosome` | GWAS Catalog TSV | `CHR_ID` | String |
 | `position_grch38` | GWAS Catalog TSV | `CHR_POS` | Integer |
 | `clinical_significance` | ClinVar summary TSV | `ClinicalSignificance` | Enrichment; matched by `rsid` |
+| `gnomad_af` | Ensembl REST `variation` (`pops=1`) | `populations[gnomADg/e:ALL]` | Summed non-ref allele freq (alt AF), genomes then exomes; by `rsid` (`16_gnomad_af.py`) |
+| `gnomad_source` | Ensembl REST | — | `"genomes"` or `"exomes"` (which gnomAD set supplied `gnomad_af`) |
 | `source_db` | `08_gwas.py` | — | `"GWAS_Catalog"` |
 
-**Key:** `rsid` (fallback `chr:pos:NA:NA`). Variant-level gnomAD allele frequency
-is a known gap (not populated). Variants are not in the fulltext index.
+**Key:** `rsid` (fallback `chr:pos:NA:NA`). `gnomad_af` is populated only for
+rs-variants (the `chr:pos:NA:NA` fallbacks carry no rsid Ensembl can resolve). Variants
+are not in the fulltext index.
 
 ### Disease
 | Field | Source | Column / API field | Transformation |
@@ -215,6 +218,7 @@ is a known gap (not populated). Variants are not in the fulltext index.
 | `name` | Recon3D `.mat` `metNames` (HMDB canonical override) | — | String |
 | `formula` | Recon3D `.mat` `metFormulas` | — | e.g. `C6H12O6` |
 | `charge` | Recon3D `.mat` `metCharges` | — | Integer |
+| `catalyses_degree` | `14_metabolomics.py` (post-pass) | — | Count of incoming `CATALYSES`; data-driven cofactor signal for the bridge gate (ADR-0012) |
 | `layer_z` | `14_metabolomics.py` | — | `900` (ADR-0009) |
 | `source_db` / `source_version` | `14_metabolomics.py` | — | `"Recon3D"` / `"3.01_mat"` |
 
@@ -375,6 +379,12 @@ any of these in ETL or traversal code.**
 | `STRING_MAX_EXPAND_PER_NODE` | `10` | Hub-protein traversal cap per frontier step |
 | `REGULATES_MAX_EXPAND_PER_NODE` | `25` | Hub-TF traversal cap per frontier step (ADR-0010) |
 | `BACKBONE_MAX_METABOLITES_PER_PROTEIN` | `25` | Cap on pinned backbone metabolites per protein (ADR-0011) |
+| `METABOLITE_BRIDGE_ENABLED` | `false` | Opt-in metabolite→co-catalysing-protein bridge (ADR-0012) |
+| `CATALYSES_MAX_EXPAND_PER_NODE` | `8` | Co-catalysing proteins a metabolite expands to per ring (bridge on) |
+| `METABOLITE_MAX_CATALYSES_DEGREE` | `30` | Metabolites above this `catalyses_degree` never bridge (cofactor cutoff) |
+| `GNOMAD_AF_BATCH_SIZE` | `50` | rsIDs per Ensembl POST in 16_gnomad_af (pops=1 is heavy) |
+| `GNOMAD_AF_REQUEST_DELAY_S` | `0.1` | Polite delay between gnomAD AF batches |
+| `GNOMAD_AF_TIMEOUT_S` | `90` | Per-request read timeout for the gnomAD AF crawl |
 | `GWAS_MIN_SIGNIFICANCE` | `5e-8` | GWAS p-value cutoff for ASSOCIATED_WITH |
 | `TRAVERSAL_DECAY` (d) | `0.7` | Per-hop signal decay multiplier |
 | `TRAVERSAL_MIN_SIGNAL` (ε) | `0.05` | Signal-decay floor |
