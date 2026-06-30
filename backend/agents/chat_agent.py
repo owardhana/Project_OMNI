@@ -52,6 +52,7 @@ class ChatAgent:
         messages.append({"role": "user", "content": user_content})
 
         answer_parts: list[str] = []
+        answered = False
         try:
             for _ in range(_MAX_TOOL_ITERS):
                 final_msg: dict | None = None
@@ -63,6 +64,7 @@ class ChatAgent:
                         final_msg = payload
 
                 if not final_msg or not final_msg.get("tool_calls"):
+                    answered = True
                     break  # no tool calls -> the streamed text was the final answer
 
                 # Run the requested tools, append assistant + tool messages, loop.
@@ -74,6 +76,19 @@ class ChatAgent:
                     messages.append({
                         "role": "tool", "tool_call_id": call["id"], "content": result,
                     })
+
+            # Tool budget exhausted without a final answer -> force one final turn with
+            # NO tools, so a complex query still concludes instead of cutting off mid-loop.
+            if not answered:
+                messages.append({
+                    "role": "user",
+                    "content": "Give your final answer now from the tool results above; "
+                               "do not call any more tools.",
+                })
+                async for kind, payload in stream_chat(SYNTHESIS_MODEL, messages, None):
+                    if kind == "text":
+                        answer_parts.append(payload)
+                        yield {"type": "token", "text": payload}
         except Exception as exc:  # noqa: BLE001 — surface a clean error, don't 500 mid-stream
             logger.warning("ChatAgent stream failed: %s", exc)
             yield {"type": "error", "message": "The assistant hit an error. Please retry."}
