@@ -1,11 +1,11 @@
 """ETL 06 — Enrich existing Protein nodes with UniProt function + annotation.
 
-Enrichment pattern (docs/data-architecture.md "Pattern 2 — REST API per entity): reads the
-Protein nodes already in the graph (the TF slice minted by 05_proteins.py) and
-calls the UniProt REST API once per accession to attach the free-text function
-comment (for embedding), subcellular location, GO terms, molecular weight, and a
-derived subtype. It NEVER mints new Protein nodes — topology comes from files, not
-APIs.
+Enrichment pattern (docs/data-architecture.md "Pattern 2 — REST API per entity"): reads the
+Protein nodes already in the graph (the FULL ~20k proteome minted by 05_proteins.py
+post-ADR-0010) and calls the UniProt REST API once per accession to attach the
+free-text function comment (for embedding), subcellular location, GO terms, molecular
+weight, and a derived subtype. It NEVER mints new Protein nodes — topology comes from
+files, not APIs.
 
 UniProt JSON shape (rest.uniprot.org/uniprotkb/{accession}.json):
   - function text : comments[] where commentType == 'FUNCTION' -> texts[0].value
@@ -16,7 +16,9 @@ UniProt JSON shape (rest.uniprot.org/uniprotkb/{accession}.json):
   - subtype       : derived from GO molecular-function ids (TF / kinase / ...)
 
 Rate limit: UniProt free tier is ~1 request/second without a key, so we sleep 1s
-between requests. ~117 TF proteins => ~2 minutes.
+between requests. The full proteome is ~20k accessions => ~5-6 hours, run unattended.
+Resumable by design: the driving query selects only proteins with ``summary_text IS
+NULL``, so a re-run continues where a crash/stop left off (idempotent MERGE on SET).
 
     etl/.venv/bin/python etl/06_uniprot_enrich.py
 """
