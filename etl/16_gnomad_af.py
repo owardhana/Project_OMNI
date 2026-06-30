@@ -55,7 +55,9 @@ ENSEMBL_URL = "https://rest.ensembl.org/variation/homo_sapiens?pops=1"
 BATCH_SIZE = int(os.getenv("GNOMAD_AF_BATCH_SIZE", "50"))
 REQUEST_DELAY_S = float(os.getenv("GNOMAD_AF_REQUEST_DELAY_S", "0.1"))
 HTTP_TIMEOUT_S = float(os.getenv("GNOMAD_AF_TIMEOUT_S", "90"))
-WRITE_BATCH_SIZE = 5000
+# Flush to Neo4j often (every ~10 Ensembl batches) so a long backfill that is
+# interrupted loses little — it resumes from gnomad_af IS NULL.
+WRITE_BATCH_SIZE = 500
 MAX_RETRIES = 4
 
 # gnomAD population preference: genomes first (broader, less ascertainment bias than
