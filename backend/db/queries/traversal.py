@@ -79,7 +79,9 @@ def _conductance(rel_type: str, rel_props: dict) -> float:
 # reaches its proteins/metabolites. Capping lets a hub seed reach MULTIPLE hops
 # (gene -> protein -> CATALYSES -> metabolite) within max_nodes. Structural
 # (PRODUCES/TRANSLATES_TO/ENCODES) edges stay uncapped — they ARE the backbone.
-# CATALYSES is NOT capped — most proteins catalyse only 1-5 reactions, no explosion.
+# CATALYSES is NOT capped by default — most proteins catalyse only 1-5 reactions, no
+# explosion. It IS added to the capped set when the metabolite bridge is on (ADR-0012),
+# because then a metabolite expands to its co-catalysing proteins and must be bounded.
 # Per-type cap: REGULATES gets a higher cap (REGULATES_MAX_EXPAND_PER_NODE) so the
 # regulatory story still reads; the rest use STRING_MAX_EXPAND_PER_NODE.
 _DENSE_CAPPED = {
@@ -92,7 +94,46 @@ def _cap_for(rel_type: str) -> int:
     """Per-node expansion cap for a dense edge type."""
     if rel_type == "REGULATES":
         return settings.REGULATES_MAX_EXPAND_PER_NODE
+    if rel_type == "CATALYSES":
+        # Only reached when the metabolite bridge is on (ADR-0012); bounds how many
+        # co-catalysing proteins a metabolite expands to.
+        return settings.CATALYSES_MAX_EXPAND_PER_NODE
     return settings.STRING_MAX_EXPAND_PER_NODE
+
+
+# Metabolite-bridge (ADR-0012) cofactor hard-exclude floor — a tiny belt-and-suspenders
+# backstop to the data-driven degree gate (Metabolite.catalyses_degree). These ubiquitous
+# cofactors are catalysed by thousands of enzymes; the degree gate already excludes them,
+# but pinning the most common canonical names keeps the bridge safe even if catalyses_degree
+# is absent (e.g. a graph predating 14_metabolomics' degree post-pass). Matched against the
+# metabolite's lower-cased canonical name. The degree gate — not this list — is the primary
+# mechanism (ADR-0011 deferred the bridge precisely to avoid a hand-maintained cofactor list).
+_COFACTOR_HARD_EXCLUDE = frozenset({
+    "h2o", "water", "h+", "proton", "atp", "adp", "amp", "gtp", "gdp",
+    "nad+", "nadh", "nadp+", "nadph", "coa", "coenzyme a", "co2",
+    "carbon dioxide", "o2", "oxygen", "pi", "phosphate", "ppi",
+    "diphosphate", "pyrophosphate", "nh3", "nh4+", "ammonia",
+})
+
+
+def _metabolite_can_bridge(payload: dict) -> bool:
+    """Whether a metabolite discovered mid-traversal may expand to its co-catalysing
+    proteins (the ADR-0012 bridge). True only when the bridge flag is on AND the
+    metabolite is not a ubiquitous cofactor — gated by its persisted CATALYSES degree
+    (data-driven) plus a small name backstop — so hub cofactors (ATP/NAD+/H2O) can
+    never flood the metabolic network."""
+    if not settings.METABOLITE_BRIDGE_ENABLED:
+        return False
+    props = payload.get("props") or {}
+    name = str(props.get("name") or "").strip().lower()
+    if name in _COFACTOR_HARD_EXCLUDE:
+        return False
+    degree = props.get("catalyses_degree")
+    # Unknown degree -> not expandable (fail safe: never flood when the property is
+    # absent). The bridge depends on 14_metabolomics' catalyses_degree post-pass.
+    if degree is None:
+        return False
+    return degree <= settings.METABOLITE_MAX_CATALYSES_DEGREE
 
 
 def _edge_rank(rel_type: str, rel_props: dict) -> float:
@@ -111,14 +152,15 @@ def _edge_rank(rel_type: str, rel_props: dict) -> float:
     return 0.0  # IN_GENE / IMPLICATED_IN: structural rollup, no score -> first-k
 
 
-def _cap_dense_frontier(rows: list[dict]) -> list[dict]:
+def _cap_dense_frontier(rows: list[dict], capped_types: set[str]) -> list[dict]:
     """Cap each node's expansion of the dense edge types to the top-k (per-type cap)
     so no single hub floods one frontier ring. Ties break deterministically by
-    neighbour key."""
+    neighbour key. ``capped_types`` is the effective set for this run (it includes
+    CATALYSES only when the metabolite bridge is on — ADR-0012)."""
     grouped: dict[tuple[str, str], list[dict]] = {}
     passthrough: list[dict] = []
     for row in rows:
-        if row["rel_type"] in _DENSE_CAPPED:
+        if row["rel_type"] in capped_types:
             grouped.setdefault((row["from_eid"], row["rel_type"]), []).append(row)
         else:
             passthrough.append(row)
@@ -320,9 +362,15 @@ async def signal_decay_subgraph(
         expanded: set[str] = set()
         frontier = list(seed_eids)
         depth = 0
+        # CATALYSES joins the dense-capped set only when the bridge is on (ADR-0012):
+        # an expanding metabolite must be bounded; off, CATALYSES stays uncapped exactly
+        # as ADR-0011 left it.
+        capped_types = _DENSE_CAPPED | (
+            {"CATALYSES"} if settings.METABOLITE_BRIDGE_ENABLED else set()
+        )
         while frontier and depth < _MAX_DEPTH and len(node_payload) < max_nodes:
             rows = await _expand(frontier, _TRAVERSAL_REL_TYPES)
-            rows = _cap_dense_frontier(rows)
+            rows = _cap_dense_frontier(rows, capped_types)
             expanded.update(frontier)
             next_frontier: list[str] = []
             for row in rows:
@@ -337,11 +385,17 @@ async def signal_decay_subgraph(
                 if structural_only.get(row["from_eid"]) and row["rel_type"] in _STRUCTURAL:
                     structural_only[nb] = True
                 _record_edge(row)
-                # Leaf rule (ADR-0011): a metabolite expands only when it is a SEED
-                # (seeds sit in the initial frontier). A metabolite discovered here is
-                # peripheral -> never re-expanded, so hub cofactors can't flood.
-                if nb not in expanded and row["nb_label"] != "Metabolite":
-                    next_frontier.append(nb)
+                # Leaf rule (ADR-0011): a metabolite discovered mid-traversal is normally
+                # a terminal leaf (never re-expanded) so hub cofactors can't flood — a
+                # metabolite expands only when it is a SEED (seeds sit in the initial
+                # frontier). The bridge (ADR-0012, opt-in) relaxes this for NON-cofactor
+                # metabolites: a discovered metabolite may expand once to its co-catalysing
+                # proteins, gated by catalyses_degree (+ name backstop) and dense-capped.
+                if nb not in expanded:
+                    if row["nb_label"] != "Metabolite":
+                        next_frontier.append(nb)
+                    elif _metabolite_can_bridge(node_payload[nb]):
+                        next_frontier.append(nb)
             # Dedup frontier, keep only not-yet-expanded.
             frontier = [e for e in dict.fromkeys(next_frontier) if e not in expanded]
             depth += 1

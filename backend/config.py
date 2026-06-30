@@ -73,6 +73,18 @@ class Settings(BaseSettings):
     # pinned protein contributes (ranked deterministically by metabolite key) — guards
     # against a promiscuous enzyme pinning hundreds of nodes past max_nodes.
     BACKBONE_MAX_METABOLITES_PER_PROTEIN: int = 25
+    # Metabolite "bridge" connectivity (ADR-0012, amends ADR-0011). Default OFF — the
+    # ADR-0011 leaf rule (a discovered metabolite is a terminal display node) is the
+    # tuned default. When ON, a discovered metabolite may expand ONCE to its
+    # co-catalysing proteins (shared-substrate links), gated so hub cofactors can't
+    # flood: a metabolite expands only if its CATALYSES degree (persisted by
+    # 14_metabolomics as Metabolite.catalyses_degree) is <= the threshold below, and
+    # its CATALYSES expansion is dense-capped per node. The degree gate is DATA-DRIVEN
+    # (re-derived every ETL run) — not a hand-maintained cofactor list (ADR-0011's
+    # reason to defer). Same gate also tames a cofactor SEED flooding ring 1.
+    METABOLITE_BRIDGE_ENABLED: bool = False
+    CATALYSES_MAX_EXPAND_PER_NODE: int = 8  # max co-catalysing proteins per metabolite/ring
+    METABOLITE_MAX_CATALYSES_DEGREE: int = 30  # metabolites above this degree never expand (cofactor cutoff)
     GWAS_MIN_SIGNIFICANCE: float = 5e-8  # GWAS p-value cutoff (genome-wide significance)
     EMBEDDING_AGENT_BATCH_SIZE: int = 50  # nodes per embedding agent run
     EMBEDDING_AGENT_CRON_HOUR: int = 1  # 1am UTC (after citation agent at midnight)

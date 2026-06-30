@@ -3,7 +3,9 @@
 Topology from a bulk file (docs/data-architecture.md Pattern 1 / docs/data-architecture.md rows
 13-14). Parses the Recon3D human metabolic reconstruction COBRA model
 (``Recon3D_301.mat``, read with scipy.io.loadmat) to extract:
-  - (:Metabolite {hmdb_id|chebi_id, name, formula, charge, inchikey})  from `mets`
+  - (:Metabolite {hmdb_id|chebi_id, name, formula, charge, inchikey, catalyses_degree})
+        from `mets`; catalyses_degree (incoming-CATALYSES graph degree) is set in a
+        post-pass as the data-driven cofactor signal for the bridge (ADR-0012).
   - (:Protein {uniprot_id})-[:CATALYSES {role, reaction_id}]->(:Metabolite)
         role = "substrate" (reactant, S<0) | "product" (S>0)
 
@@ -256,6 +258,19 @@ def _write_catalyses(session, rows: list[dict]) -> None:
                     source_db=SOURCE_DB, source_version=SOURCE_VERSION).consume()
 
 
+def _set_catalyses_degree(session) -> None:
+    """Persist Metabolite.catalyses_degree = number of distinct proteins that catalyse
+    it (graph degree of incoming CATALYSES). This is the data-driven 'hubness' signal
+    the metabolite-bridge traversal gates on (ADR-0012): cofactors like ATP/NAD+/H2O
+    have very high degree and are excluded from bridge expansion. Re-derived every run,
+    so no hand-maintained cofactor list is needed (ADR-0011's reason to defer the
+    bridge). Run AFTER CATALYSES edges are written."""
+    session.run(
+        "MATCH (m:Metabolite) "
+        "SET m.catalyses_degree = COUNT { (m)<-[:CATALYSES]-(:Protein) }"
+    ).consume()
+
+
 def _apply_min_reactions(session, met_reaction_count: dict[str, int]) -> int:
     """Delete loaded metabolites whose intrinsic S-matrix reaction participation is
     below METABOLOMICS_MIN_REACTIONS (default 1 keeps all)."""
@@ -403,6 +418,7 @@ def main() -> None:
     with get_session() as session:
         _write_metabolites(session, metabolite_rows)
         _write_catalyses(session, edge_rows)
+        _set_catalyses_degree(session)  # data-driven cofactor signal for the bridge (ADR-0012)
         deleted = _apply_min_reactions(session, key_rxn_count)
         session.run(
             "MERGE (ds:DataSource {name: $name}) "
