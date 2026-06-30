@@ -37,6 +37,10 @@ ORDER = [
     # over the whole proteome and 14_metabolomics' CATALYSES connects. STRING's
     # threshold is raised (STRING_MIN_CONFIDENCE=0.95) to keep INTERACTS_WITH sane.
     "12_cosmic", "13_tcga", "14_metabolomics",
+    # Variant-level gnomAD allele frequency (Pattern-2 API crawl). Last because it
+    # only needs the variants (08/09) and is a long Ensembl REST crawl — keep it from
+    # blocking the bulk topology steps in a full run. Resumable (gnomad_af IS NULL).
+    "16_gnomad_af",
 ]
 
 # A step is aborted if a prerequisite that runs EARLIER in ORDER failed in this
@@ -54,6 +58,8 @@ BLOCKING: dict[str, set[str]] = {
     "12_cosmic": {"01_hgnc"},
     "13_tcga": {"01_hgnc", "08_gwas"},
     "14_metabolomics": {"01_hgnc", "05_proteins"},
+    # gnomAD AF enriches existing Variant nodes — needs them minted (08) / matched (09).
+    "16_gnomad_af": {"08_gwas", "09_clinvar"},
 }
 
 
