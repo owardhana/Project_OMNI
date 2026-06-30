@@ -185,6 +185,21 @@ class QueryResponse(BaseModel):
     error: Optional[str] = None
 
 
+class ChatRequest(BaseModel):
+    """Agentic chatbot turn (Feature 1). ``session_id`` keys conversational memory;
+    the client generates one per conversation and reuses it for follow-ups."""
+    session_id: str
+    message: str
+    tissue: str = "all"
+
+
+class ChatResponse(BaseModel):
+    """Non-streaming chat reply (the SSE route streams the same content as events)."""
+    answer: str
+    tools_used: list[str] = Field(default_factory=list)
+    error: bool = False
+
+
 class EdgeDetail(BaseModel):
     rel_type: str
     source: str

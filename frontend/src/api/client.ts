@@ -23,6 +23,47 @@ export interface EntityFilters {
 
 const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
+// Streaming chat (Feature 1). The SSE route is POST (body carries session_id +
+// message), so we read the response body and parse `data: {json}\n\n` frames rather
+// than using EventSource (GET-only).
+export type ChatEvent =
+  | { type: 'token'; text: string }
+  | { type: 'tool'; name: string; status: 'running' | 'done' }
+  | { type: 'done'; answer: string }
+  | { type: 'error'; message: string };
+
+export async function chatStream(
+  body: { session_id: string; message: string; tissue?: string },
+  onEvent: (ev: ChatEvent) => void,
+): Promise<void> {
+  const res = await fetch(`${BASE_URL}/api/chat/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok || !res.body) throw new Error(`chat stream failed: ${res.status}`);
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const frames = buf.split('\n\n');
+    buf = frames.pop() ?? ''; // keep the trailing partial frame
+    for (const frame of frames) {
+      const line = frame.trim();
+      if (line.startsWith('data:')) {
+        try {
+          onEvent(JSON.parse(line.slice(5).trim()) as ChatEvent);
+        } catch {
+          /* ignore malformed frame */
+        }
+      }
+    }
+  }
+}
+
 async function getJSON<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE_URL}${path}`);
   if (!res.ok) {

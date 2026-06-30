@@ -8,6 +8,7 @@ import GraphLegend from './components/GraphLegend';
 import GraphViewer3D from './components/GraphViewer3D';
 import LayerToggle from './components/LayerToggle';
 import NodeDetailPanel from './components/NodeDetailPanel';
+import ChatPanel from './components/ChatPanel';
 import QueryPanel from './components/QueryPanel';
 import SearchBar from './components/SearchBar';
 import ShortcutsOverlay from './components/ShortcutsOverlay';
@@ -268,6 +269,7 @@ export default function App() {
       />
 
       <QueryPanel tissue={activeTissue} />
+      <ChatPanel tissue={activeTissue} />
     </div>
   );
 }
