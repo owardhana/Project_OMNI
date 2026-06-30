@@ -21,7 +21,7 @@ from backend.llm.prompts.chat import CHAT_SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
 
-_MAX_TOOL_ITERS = 5  # safety cap on the tool loop (each iter = one LLM turn)
+_MAX_TOOL_ITERS = 6  # safety cap on the tool loop (each iter = one LLM turn)
 
 
 def _assistant_msg(msg: dict) -> dict:

@@ -100,11 +100,16 @@ async def _shortest_path(from_id: str, from_type: str, to_id: str,
     resp = await graph_path(
         from_id=from_id, type_a=from_type, to_id=to_id, type_b=to_type, max_hops=6
     )
+    # PathResponse nodes are typed models (GeneNode/ProteinNode/...) with `node_type`,
+    # not generic {kind, props} — dump to a dict and reuse the display helper.
     return {
         "path_found": resp.path_found,
         "quality": resp.path_quality,
         "hops": resp.hop_count,
-        "nodes": [{"kind": n.kind, "name": _display(n.kind, n.props)} for n in resp.nodes],
+        "nodes": [
+            {"kind": n.node_type, "name": _display(n.node_type, n.model_dump())}
+            for n in resp.nodes
+        ],
         "warning": resp.warning,
     }
 
