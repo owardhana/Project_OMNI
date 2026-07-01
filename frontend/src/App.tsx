@@ -9,7 +9,6 @@ import GraphViewer3D from './components/GraphViewer3D';
 import LayerToggle from './components/LayerToggle';
 import NodeDetailPanel from './components/NodeDetailPanel';
 import ChatPanel from './components/ChatPanel';
-import QueryPanel from './components/QueryPanel';
 import SearchBar from './components/SearchBar';
 import ShortcutsOverlay from './components/ShortcutsOverlay';
 import TissueFilter from './components/TissueFilter';
@@ -268,7 +267,6 @@ export default function App() {
         onClose={selectedEdge ? () => setSelectedEdge(null) : undefined}
       />
 
-      <QueryPanel tissue={activeTissue} />
       <ChatPanel tissue={activeTissue} />
     </div>
   );

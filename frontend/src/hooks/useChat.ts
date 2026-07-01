@@ -9,13 +9,15 @@ export interface ChatMessage {
 
 // State for the agentic chat panel (Feature 1): multi-turn history, live-streamed
 // assistant tokens, and the currently-running tool name (for a "thinking" chip).
+const newSessionId = () =>
+  typeof crypto !== 'undefined' && crypto.randomUUID
+    ? crypto.randomUUID()
+    : String(Date.now());
+
 export function useChat() {
-  // One session id per mounted conversation -> server-side conversational memory.
-  const sessionId = useRef(
-    typeof crypto !== 'undefined' && crypto.randomUUID
-      ? crypto.randomUUID()
-      : String(Date.now()),
-  );
+  // One session id per conversation -> server-side conversational memory. `reset`
+  // rotates it to start a fresh thread (the "New chat" button).
+  const sessionId = useRef(newSessionId());
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [draft, setDraft] = useState(''); // assistant text streaming in
@@ -59,5 +61,14 @@ export function useChat() {
     [streaming],
   );
 
-  return { messages, draft, streaming, tool, error, send };
+  const reset = useCallback(() => {
+    if (streaming) return;
+    sessionId.current = newSessionId();
+    setMessages([]);
+    setDraft('');
+    setTool(null);
+    setError(null);
+  }, [streaming]);
+
+  return { messages, draft, streaming, tool, error, send, reset };
 }
