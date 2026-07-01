@@ -1,106 +1,163 @@
-# Design brainstorm — Literature Extraction Agent (Feature 2)
+# Design — Literature Extraction Agent (Feature 2)
 
-Status: **Brainstorm / not started.** This is a design exploration, not an accepted
-ADR. It fleshes out the roadmap's deferred "Literature extraction agent — new-edge
-proposals; separate design session (NLP pipeline + validation queue)" item. No code
-exists yet. Decisions here are provisional until an ADR is written.
+Status: **Design locked, not started.** A grill-with-docs session (2026-07-01) walked
+the full design tree and locked 9 decisions. This is now an *implementation plan*, not
+a brainstorm. The trust/provenance model is captured separately in
+[ADR-0013](../adr/0013-literature-extraction-trust-model.md) (write it before promotion
+is built). No code exists yet.
 
 ## Goal
 
-A scheduled agent that reads biomedical papers (new NCBI/PubMed uploads + a one-time
-backfill of past literature), determines whether any node↔node relationship in
-OmniGraph's vocabulary is supported, extracts it with provenance, and **proposes** it
-for inclusion — and likewise enriches existing nodes/edges. After extraction the paper
-text is discarded (only PMID + the supporting span is kept), so storage stays bounded.
+A scheduled agent that reads biomedical papers (nightly PubMed delta + a deferred
+historical backfill), decides whether any node↔node relationship in OmniGraph's
+vocabulary is *asserted*, extracts it with provenance, and **proposes** it as a
+candidate — never a trusted edge. After extraction the paper text is discarded (only
+PMID + supporting sentence span kept), so storage stays bounded.
 
 ## The hard part is trust, not plumbing
 
-OmniGraph's entire credibility rests on one rule: **agents never hallucinate biology.**
-The existing `CitationAgent` only attaches PMIDs to *existing* edges; the `EmbeddingAgent`
-only writes vectors. Neither invents topology. A literature extractor *does* propose new
-topology, which breaks that rule unless it is firewalled. So the central design
-constraint is:
+OmniGraph's credibility rests on one rule: **agents never hallucinate biology.**
+`CitationAgent` only attaches PMIDs to *existing* edges; `EmbeddingAgent` only writes
+vectors. Neither invents topology. A literature extractor *does* propose new topology,
+which breaks that rule unless firewalled:
 
-> Extracted relationships are **candidates**, never trusted graph edges. They live in a
-> separate staging space with provenance + confidence, and only a **promotion gate**
-> (human review, or a high-confidence auto-promote policy) ever moves them into the
-> consortium-grade graph.
+> Extracted relationships are **candidates**, never trusted edges. They live in a
+> separate staging space (`:CandidateEdge`) with provenance + confidence. Only a
+> **promotion gate** (human review, or a calibrated auto-promote policy) ever moves
+> them into the consortium-grade graph, and even then they are permanently tagged
+> `provenance_tier='literature'` — distinguishable from canonical truth forever.
 
-This firewall is non-negotiable. Without it, one bad extraction poisons the trusted data
-from GTEx/STRING/UniProt/Recon3D/GWAS.
+See [ADR-0013](../adr/0013-literature-extraction-trust-model.md) for the firewall.
 
-## Pipeline
+---
 
-1. **Ingest.** PubMed abstracts are free via NCBI E-utilities (the `CitationAgent`
-   already uses `esearch`/`efetch` — reuse that client). Nightly = `reldate` delta;
-   backfill = batched historical pull. Full text only where available via the PMC
-   Open-Access subset (most papers are abstract-only — design for abstracts first).
-2. **NER.** Detect gene/protein/disease/metabolite/variant mentions. Cheap/local model
-   or a dictionary+scispaCy pass — this is the high-volume filter, so keep it cheap.
-3. **Entity linking (the hardest, most error-prone step).** Map each mention to a
-   canonical graph id: HGNC symbol → ENSG, protein name → UniProt, trait → EFO,
-   metabolite → HMDB/ChEBI, variant → rsid. Needs a dictionary (HGNC symbols + aliases,
-   UniProt names, EFO labels, HMDB names) and disambiguation ("PCA" = gene? method?
-   cell line?). Unresolved mentions are dropped, not guessed.
-4. **Relation extraction.** An LLM proposes `(subject_id, REL_TYPE, object_id)` from the
-   sentence, **restricted to OmniGraph's edge vocabulary** (REGULATES, INTERACTS_WITH,
-   ASSOCIATED_WITH, IMPLICATED_IN, CATALYSES, DIFFERENTIALLY_EXPRESSED, …). Must detect
-   **negation/hedging** ("X does *not* regulate Y", "may be associated") and down-weight
-   or drop accordingly.
-5. **Stage — never merge.** Write `(:CandidateEdge {rel_type, subject_id, object_id,
-   confidence, pmid, sentence_span, model, extracted_at, status:'pending'})`. Dedup
-   against existing trusted edges (if the edge already exists → instead attach the PMID
-   as *enrichment*, the CitationAgent's job, not a new edge). Multi-paper agreement
-   raises confidence (N independent PMIDs for the same triple → stronger).
-6. **Promotion gate.** A review surface (admin UI queue) or an auto-promote policy above
-   a confidence threshold **with** ≥N independent papers. On promote: create the real
-   edge with `source_db='literature_extracted'`, `pmids=[…]`, provenance. On reject:
-   keep the candidate flagged so it isn't re-proposed.
-7. **Discard paper.** Retain PMID + extracted sentence span as provenance; drop full
-   text. Storage stays bounded.
+## Locked decisions (grill session 2026-07-01)
 
-## Cost / compute (ties into the cloud-migration plan)
+| # | Decision | Choice | Why |
+|---|----------|--------|-----|
+| 1 | World model | **Closed-world** | Graph already holds every canonical id (20k proteins, genes, diseases, metabolites). Entity-linking collapses from "hardest step" to a bounded lookup against our own nodes. A mention that doesn't resolve to an existing node is **dropped**, never minted. Open-world node-minting is P3+. |
+| 2 | NER + linking | **Dictionary/gazetteer** (aho-corasick), not statistical NER | Closed-world makes a trained model redundant — we never need to *discover* spans for entities we can't link. Deterministic, auditable, zero-GPU (matters for eventual ARM host). Riders: **load aliases first** + an **ambiguity stoplist**. |
+| 3 | Corpus | **Broad `reldate` delta + local ≥2-entity co-mention filter** | E-utils ingest ≈ $0. The "≥2 linked entities **in the same sentence**" gate drops 99% of new papers before any LLM call — the real cost firewall. Backfill (millions) deferred to P3. |
+| 4 | Edge types (MVP) | **`INTERACTS_WITH` + `IMPLICATED_IN`** only | Both densely stated in abstracts and **direction-free** (endpoint kinds pin direction). Lowest extraction-error surface. `CATALYSES` → `REGULATES` → `ASSOCIATED_WITH` are fast-follows. |
+| 5 | Test/dev env | **Local Docker Neo4j + branch + labelled fixtures** | Community edition = single user DB (no 2nd named DB); the `:CandidateEdge` label *is* the data firewall, not a separate instance. Prod graph is source-of-truth — kept off. Fixtures are the real quality gate. |
+| 6 | Relation model | **One cheap deterministic LLM call per (sentence, pair)**; no two-tier for nightly | Post-filter volume is tiny (hundreds of sentences/day). Constrained JSON, temp 0, explicit polarity. Two-tier cheap→strong is a **backfill** concern. |
+| 7 | Confidence | **Independent-PMID agreement**, not model self-report | Model verdict is the *gate*; # independent affirming papers − # contradicting is the *score*. |
+| 8 | Storage | **Two-tier `:CandidateEdge` + `:CandidateEvidence`** | Multi-paper agreement is a real edge count, ids are string properties (traversal-invisible), MERGE-on-triple_key = idempotent nightly. |
+| 9 | Host (MVP) | **Local-only** | No Oracle/ARM/GPU contention with the running enrichment crawls. Real cron + prod host deferred with [cloud-migration](cloud-migration.md). |
 
-High volume makes this the expensive feature (millions of backfill papers + nightly).
-- **Tier aggressively:** cheap/local model for NER + a first relation pass on the 99%;
-  an expensive API model only on candidate sentences that survive the filter.
-- **No free GPU on Oracle A1** (ARM CPU only). Options: a quantized local LLM on the A1
-  CPU (llama.cpp; fine for *nightly batch* throughput, free) for bulk NER, and tiered
-  API (cheap model) for disambiguation/relation extraction. Backfill = throttled batch
-  over days/weeks, or a one-time budgeted API spend.
-- See [`docs/design/cloud-migration.md`](cloud-migration.md) for the host/compute side.
+---
 
-## Schema sketch
+## Pipeline (MVP)
+
+1. **Dictionary build.** Export from the *local* graph: `Gene.hgnc_symbol` (+ new
+   `Gene.aliases[]`), `Protein` display name + UniProt, `Disease` label, into an
+   aho-corasick matcher. Each entry → `(surface_form → {id, kind})`. Guaranteed
+   in-graph by construction. **Prerequisite ETL patch:** `01_hgnc.py` currently drops
+   the `alias_symbol` / `prev_symbol` columns of `hgnc_complete_set.txt`; load them
+   into `Gene.aliases[]` or recall craters ("p53" in a paper ≠ `TP53` canonical).
+2. **Ingest.** `esearch` with `reldate=<N days>` (nightly delta) → `efetch` abstracts
+   (reuse `citation_agent.py`'s E-utils client, rate-limit, provenance). Full text
+   (PMC OA) is **out** for MVP — abstracts only.
+3. **Match + gate.** Sentence-split each abstract, run the matcher, keep **only
+   sentences with ≥2 distinct linked entities of compatible kinds** (protein–protein →
+   `INTERACTS_WITH`; gene–disease → `IMPLICATED_IN`). This is the cost firewall — 99%
+   drop here, free.
+4. **Extract.** One cheap LLM call per surviving (sentence, entity-pair). Endpoint
+   kinds pre-select the edge type, so the model answers a near-binary:
+   `{asserted: bool, polarity: affirm|negate|hedge, confidence: 0-1, evidence_span}`.
+   Temp 0, constrained JSON, model slug from OpenRouter config (ADR-0002).
+   `polarity ∈ {negate, hedge}` → dropped or floored (this is where naive extractors
+   poison graphs).
+5. **Dedup + stage.** Before minting:
+   - **Enrichment check** — if a **trusted** edge of that type already exists between
+     the two real nodes → this paper is *enrichment*, not a candidate: append the PMID
+     (see "Enrichment path" caveat below). Do **not** create a candidate.
+   - **Symmetric normalization** — `INTERACTS_WITH` A–B == B–A; canonicalize endpoint
+     order into `triple_key` or the same interaction double-counts.
+   - `MERGE (:CandidateEdge {triple_key})`, `CREATE (:CandidateEvidence {pmid,…})` iff
+     that PMID isn't already recorded for the triple (idempotent nightly), recompute
+     `n_affirm`/`n_negate`/`confidence`.
+6. **Discard paper.** Keep PMID + `sentence_span`; drop full text.
+
+## Schema (staging)
 
 ```
-(:CandidateEdge {
-   id, rel_type, subject_id, subject_label, object_id, object_label,
-   confidence, status: 'pending'|'promoted'|'rejected',
-   pmids: [..], sentence_span, model, agent_version, extracted_at
+(:CandidateEdge {                          // one per unique triple — TRAVERSAL-INVISIBLE
+   triple_key,                             // canonical: rel + direction/sorted endpoint ids
+   rel_type, subject_id, subject_kind, object_id, object_kind,
+   status: 'pending'|'promoted'|'rejected',
+   n_affirm, n_negate, confidence,
+   provenance_tier: 'literature',          // NEVER 'canonical'
+   source_agent, agent_version, first_seen, last_seen
+})
+   ↑ [:SUPPORTS]
+(:CandidateEvidence {                       // one per PMID
+   pmid, sentence_span, polarity, model, model_conf, extracted_at
 })
 ```
-Kept entirely separate from trusted edges. A promoted candidate becomes a normal typed
-edge with `source_db='literature_extracted'`; the CandidateEdge is marked `promoted`.
 
-## Risks / open questions
+`subject_id`/`object_id` are **string properties, not relationships to real nodes** —
+a CandidateEdge touches zero biological topology until promotion. Same operational
+class as `:ChatSession`/`:CitationRun`.
 
-- **Entity-linking errors propagate into wrong edges** → strict dictionary + confidence
-  floor + the promotion gate.
-- **Spurious / contradicted relations** → multi-paper agreement, negation handling,
-  human review for low-confidence.
-- **Backfill cost/scale** → tiering + local CPU model + throttling.
-- **Edge vocabulary fit** — not every literature relationship maps cleanly to the 9 edge
-  types; out-of-vocabulary relations are dropped (don't invent new edge types ad hoc).
-- **Review throughput** — a human gate doesn't scale to millions; need a calibrated
-  auto-promote threshold measured against a hand-labelled sample first.
+## MVP boundary
 
-## Suggested phasing
+**IN:** `backend/agents/extraction_agent.py` + runnable CLI/admin entrypoint (not cron);
+dictionary builder + `01_hgnc.py` alias patch; the pipeline above for `INTERACTS_WITH`
++ `IMPLICATED_IN`; 30–50 labelled fixture abstracts + pytest precision/**recall**
+measurement; config tunables (never hardcode: reldate window, batch sizes, confidence
+floor, min-token-length stoplist, model slug).
 
-1. **P1 — extraction-to-staging only.** Nightly delta → CandidateEdge nodes, no
-   promotion. Build the dictionary + NER + relation extractor; measure precision on a
-   labelled sample. (Two ADRs: the pipeline, and the staging/trust model.)
+**OUT (scope guard):** promotion gate / auto-promote / review UI (**P2**); backfill
+(**P3**); real cron + Oracle host (deferred w/ migration); PMC full text; `REGULATES` /
+`CATALYSES` / `ASSOCIATED_WITH` (fast-follow); open-world node minting (P3+).
+
+**Success criterion:** measured precision **and recall** on the fixture set (precision
+target ≥0.8) for both edge types with negation correctly dropped; a delta run yields N
+CandidateEdges with full provenance; and an assertion that **no candidate appears in
+traversal, `search_graph`, or the UI node/edge counts** before/after a run (proves zero
+topology leak — see firewall invariant in ADR-0013).
+
+---
+
+## Risks / caveats (fold into the plan, not ignore)
+
+- **`IMPLICATED_IN` has a pre-existing, different meaning.** CONTEXT.md defines it as a
+  *GWAS-aggregated* gene→disease rollup; `traversal.py:62` gives it a flat `0.5`
+  conductance. A literature "gene X implicated in Y" is a *qualitative textual claim*.
+  `provenance_tier` separates the source but not the semantics. **ADR-0013 must decide**
+  what conductance a promoted literature `IMPLICATED_IN` carries (recommendation: a
+  discount vs canonical, keyed on `provenance_tier`). Does not bite at MVP (staging
+  only, no promotion) — but must be resolved before P2.
+- **Disease linking is materially harder than gene.** EFO labels ("type 2 diabetes
+  mellitus") ≠ how papers phrase them ("T2D", "diabetic"). `IMPLICATED_IN` recall will
+  lag `INTERACTS_WITH`. Fixtures **must** include disease-linking cases, and the metric
+  reports **recall**, not just precision (staging makes low recall safe — but you must
+  *see* it).
+- **The enrichment path is not free.** `CitationAgent` cites **`REGULATES` only**
+  (`citation_agent.py:9`). "Hand the PMID to the CitationAgent path" for an existing
+  `INTERACTS_WITH`/`IMPLICATED_IN` edge is **not an existing path** — it's a direct
+  `pmids[]`-append write (additive, never overwriting canonical `source_db`), or a
+  CitationAgent generalization. Cost it as new work, not zero.
+- **Read-path firewall is broader than traversal.** `run_cypher` (chat tool) is
+  write-blocked but *not* label-filtered → a power user's raw `MATCH (n)` can see
+  candidates (acceptable, same as existing operational nodes). But **UI node/edge
+  counts must exclude operational labels** or `622,813` silently inflates. See ADR-0013.
+
+## Cost / compute (backfill only)
+
+Nightly is near-free (E-utils + local filter + a few hundred cheap LLM calls). The
+expensive tier is **backfill** (millions of papers) — deferred to P3, where the
+cheap-screen→strong-confirm two-tier and a possible quantized local model on the host
+CPU (llama.cpp, ARM) actually matter. See [cloud-migration.md](cloud-migration.md).
+
+## Phasing
+
+1. **P1 (this design) — extraction-to-staging, local.** Nightly delta → CandidateEdge,
+   no promotion. Dictionary + matcher + relation extractor + fixtures + measured
+   precision/recall. ADR-0013 (trust model) lands here.
 2. **P2 — promotion gate.** Admin review queue + auto-promote policy once precision is
-   known. Enrichment path (attach PMIDs to existing edges) lands here too.
-3. **P3 — backfill.** Throttled historical pull once P1/P2 are calibrated and cheap.
-
-Not for this session — captured so the design is ready when prioritised.
+   known; enrichment path (`INTERACTS_WITH`/`IMPLICATED_IN` PMID append) + the
+   `IMPLICATED_IN` conductance decision; frontend "proposed" edge rendering.
+3. **P3 — backfill + more edge types + host.** Throttled historical pull, tiered
+   models, `CATALYSES`/`REGULATES`/`ASSOCIATED_WITH`, Oracle host + real cron.

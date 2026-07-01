@@ -133,6 +133,30 @@ A rolled-up **gene**-to-**disease** association (aggregated from GWAS Catalog
 variant-level hits). Directed, gene → disease. A convenience edge for direct
 gene-disease queries without traversing through individual variants.
 
+### Provenance & trust
+
+**Provenance tier**:
+The trust class of a node or edge — `canonical` (from a curated consortium source:
+GTEx, STRING, UniProt, Recon3D, GWAS Catalog, ClinVar, COSMIC, TCGA) or `literature`
+(proposed by the literature-extraction agent from a paper). Canonical is consortium
+truth; literature is machine-proposed and carries less traversal signal. Always
+distinguishable — never collapse the two.
+_Avoid_: treating a literature-proposed edge as equivalent to consortium data.
+
+**Candidate relationship**:
+A relationship the literature-extraction agent has *proposed* from a paper but which
+is **not** part of the trusted graph. It is staged separately with its supporting
+evidence (PMID + sentence) and a confidence, and touches no biological topology until
+**promotion**. A candidate is never a traversable edge.
+_Avoid_: "extracted edge" (implies it is already in the graph — it is not).
+
+**Promotion**:
+The gated act of turning a candidate relationship into a real, traversable edge —
+via human review or a calibrated auto-promote policy. A promoted edge is permanently
+tagged `provenance_tier = literature`. See
+[ADR-0013](docs/adr/0013-literature-extraction-trust-model.md).
+_Avoid_: "merge" / "accept" as synonyms for the gated step — promotion is deliberate.
+
 ### Identity & disambiguation
 
 The same molecule appears once per layer (gene `TP53`, transcript `TP53-201`,

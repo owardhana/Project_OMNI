@@ -58,7 +58,7 @@ Project_OMNI/
 │   ├── vision-and-mvp.md      ← why it exists, scope, design decisions
 │   ├── data-architecture.md   ← data model + full field-level provenance catalog
 │   ├── roadmap.md             ← current state + future/gated work
-│   ├── adr/                   ← Architecture Decision Records (0001–0012)
+│   ├── adr/                   ← Architecture Decision Records (0001–0013)
 │   ├── deploy/                ← Oracle Cloud production runbook
 │   └── design/                ← forward-looking design docs (Feature 2, cloud migration)
 │
@@ -103,7 +103,8 @@ proteins) · [0005](docs/adr/0005-signal-decay-traversal.md) (signal-decay trave
 [0009](docs/adr/0009-metabolomics-layer-4.md) (metabolomics layer) ·
 [0010](docs/adr/0010-full-proteome.md) (full proteome) ·
 [0011](docs/adr/0011-backbone-guaranteed-traversal.md) (backbone-guaranteed traversal) ·
-[0012](docs/adr/0012-metabolite-bridge-connectivity.md) (metabolite bridge — opt-in).
+[0012](docs/adr/0012-metabolite-bridge-connectivity.md) (metabolite bridge — opt-in) ·
+[0013](docs/adr/0013-literature-extraction-trust-model.md) (literature-extraction trust model).
 
 ---
 
