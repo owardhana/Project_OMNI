@@ -127,10 +127,13 @@ bash scripts/restore_graph.sh
 docker compose -f docker-compose.prod.yml --env-file deploy/.env.prod up -d --build
 ```
 
-Check it:
+Check it (⚠️ **every** `docker compose` subcommand needs `--env-file deploy/.env.prod`,
+not just `up` — compose interpolates `NEO4J_PASSWORD` even for `ps`/`logs`/`stop`, and
+only reads the file when you pass it):
 ```bash
-docker compose -f docker-compose.prod.yml ps          # all healthy?
+docker compose -f docker-compose.prod.yml --env-file deploy/.env.prod ps   # all healthy?
 curl -s localhost/api/gene/TP53 | head -c 200          # backend via Caddy
+docker logs omnigraph-neo4j 2>&1 | tail -60            # raw docker logs need no --env-file
 ```
 Then open **`http://<VM_IP>/`** in your browser — the 3D graph + the chat panel.
 
@@ -195,6 +198,7 @@ docker compose -f docker-compose.prod.yml --env-file deploy/.env.prod up -d --bu
 |---------|-----|
 | **SSH itself times out** after editing the Security List (timeout, not "refused") | You broke the default **port-22** ingress rule. Re-add ingress: Source `0.0.0.0/0`, TCP, **Destination** port `22` (a classic slip is typing 22 in *Source* port), **Stateless = No**. Confirm it's the SL attached to *this VM's subnet* (Instance → Attached VNICs → VNIC → Subnet). |
 | Pasted Phase 4 block silently skipped `git clone` (empty home dir) | `newgrp docker` opens a subshell that **swallows the rest of a pasted block**. Run the `git clone` lines on their own, or `exit` and re-SSH first (re-login also activates docker-group membership, so `docker` works without sudo). |
+| `required variable NEO4J_PASSWORD is missing a value` | You omitted `--env-file deploy/.env.prod` on that compose command. It's required on *every* subcommand (ps/logs/stop/down), not just `up`. Your password isn't wrong. |
 | SSH works, site doesn't load | Firewall — you missed Phase **3b** (iptables) or **3a** (Security List). |
 | "Out of host capacity" on create | Retry / different AD / different region (Phase 2 note). |
 | Backend unhealthy, Neo4j OOM | Lower `NEO4J_HEAP`/`NEO4J_PAGECACHE` in `deploy/.env.prod` (try 2G/3G) and re-up. 12 GB is tight. |
