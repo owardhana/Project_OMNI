@@ -29,8 +29,8 @@ Live in Neo4j Community 5.x (Docker, named volume).
 
 - **Phases 1–2 (genomics → proteomics → disease):** Gene/Transcript/Protein/Variant/
   Disease nodes; REGULATES, PRODUCES, TRANSLATES_TO/ENCODES, INTERACTS_WITH, IN_GENE,
-  ASSOCIATED_WITH, IMPLICATED_IN. Text2Cypher, citation + embedding agents, semantic
-  search, 3D viz, Entity Browser, shortest-path.
+  ASSOCIATED_WITH, IMPLICATED_IN. Agentic chat assistant, citation + embedding agents,
+  semantic search, 3D viz, Entity Browser, shortest-path.
 - **Full proteome (ADR-0010):** Protein 117 → 20,077, minted directly by
   `05_proteins.py` (TRANSLATES_TO + ENCODES, TF-subtype tag, REGULATES migration).
   This connected the metabolite layer (CATALYSES 8 → 24,545). STRING re-run at the

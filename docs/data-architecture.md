@@ -417,11 +417,6 @@ specific node properties. Provenance convention: **agent writes carry
 - **Reads:** edges with `pmids = []`. **Writes:** validated PMIDs onto the edge.
 - **Never** creates topology — PMID enrichment only.
 
-### Text2Cypher (query-time, not batch)
-- Reads `apoc.meta.schema()` (cached per process). Generates Cypher from natural
-  language; `validate_cypher()` blocks any write keyword (MERGE/CREATE/DELETE/SET);
-  executes read-only.
-
 ### ChatAgent (query-time, not batch)
 - **Reads** the biological graph through 4 read-only tools (search / subgraph /
   shortest-path / validator-gated `run_cypher`) — never writes topology.

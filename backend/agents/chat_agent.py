@@ -1,14 +1,14 @@
 """ChatAgent — agentic, tool-using, streaming conversational assistant (Feature 1).
 
-Extends the single-shot QueryAgent into a multi-turn agent loop:
+A multi-turn, tool-using agent loop:
 
   load history -> [system, ...history, user] -> stream an LLM turn -> if it asked for
   tools, run them (read-only), append results, loop -> else stream the final answer.
 
 Memory: prior user/assistant turns are loaded from / saved to Neo4j (db/queries/chat).
 Streaming: ``run_stream`` is an async generator of event dicts the SSE route forwards
-({type: token|tool|done|error}). Read-only throughout — same safety posture as
-QueryAgent (the tools never write; there is no write path).
+({type: token|tool|done|error}). Read-only throughout — the tools never write; there
+is no write path.
 """
 
 import logging

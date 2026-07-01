@@ -166,20 +166,6 @@ export interface EntitySearchResponse {
   has_more: boolean;
 }
 
-export interface QueryRequest {
-  question: string;
-  tissue?: string;
-  max_hops?: number;
-}
-
-export interface QueryResponse {
-  answer: string;
-  cypher: string;
-  results: Record<string, unknown>[];
-  citations: string[];
-  error?: string | null;
-}
-
 // react-force-graph runtime shapes (nodes/links gain simulation fields).
 export type FGNode = GraphNode & {
   x?: number;

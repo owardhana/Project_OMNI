@@ -10,7 +10,6 @@ from backend.config import settings
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
-TEXT2CYPHER_MODEL = settings.TEXT2CYPHER_MODEL
 SYNTHESIS_MODEL = settings.SYNTHESIS_MODEL
 CITATION_CHECK_MODEL = settings.CITATION_CHECK_MODEL
 

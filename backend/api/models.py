@@ -171,20 +171,6 @@ class SearchResult(BaseModel):
     ensembl_id: Optional[str] = None  # populated for gene results (back-compat)
 
 
-class QueryRequest(BaseModel):
-    question: str
-    tissue: str = "all"
-    max_hops: int = 2
-
-
-class QueryResponse(BaseModel):
-    answer: str
-    cypher: str
-    results: list[dict] = Field(default_factory=list)
-    citations: list[str] = Field(default_factory=list)
-    error: Optional[str] = None
-
-
 class ChatRequest(BaseModel):
     """Agentic chatbot turn (Feature 1). ``session_id`` keys conversational memory;
     the client generates one per conversation and reuses it for follow-ups."""

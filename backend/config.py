@@ -35,7 +35,6 @@ class Settings(BaseSettings):
     NCBI_API_KEY: str = ""
 
     # Models (OpenRouter slugs)
-    TEXT2CYPHER_MODEL: str = "anthropic/claude-sonnet-4.6"
     SYNTHESIS_MODEL: str = "anthropic/claude-sonnet-4.6"
     CITATION_CHECK_MODEL: str = "anthropic/claude-haiku-4.5"
     # Phase 2: embedding model for semantic search (ADR-0008). 1536-dim.

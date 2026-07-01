@@ -5,8 +5,6 @@ import type {
   GeneNode,
   GraphResponse,
   PathResponse,
-  QueryRequest,
-  QueryResponse,
   SearchResult,
   TranscriptNode,
 } from '../types/graph';
@@ -129,8 +127,6 @@ export const api = {
 
   getTranscript: (ensemblTxId: string) =>
     getJSON<TranscriptNode>(`/api/transcript/${encodeURIComponent(ensemblTxId)}`),
-
-  query: (body: QueryRequest) => postJSON<QueryResponse>('/api/query', body),
 
   searchEntities: (f: EntityFilters) => {
     const p = new URLSearchParams();

@@ -2,8 +2,9 @@
 
 The agentic chatbot is given these typed functions instead of only raw Cypher: the
 LLM picks a tool, we execute it against the live graph, and feed the (compact) result
-back. Every tool is READ-ONLY — same safety posture as QueryAgent (no writes, ever).
-``run_cypher`` keeps the Text2Cypher escape hatch but routes through validate_cypher.
+back. Every tool is READ-ONLY (no writes, ever). ``run_cypher`` is the raw
+NL-to-Cypher escape hatch for aggregations the typed tools can't express; it routes
+through ``validate_cypher`` (single-MATCH, read-only guard).
 
 Tool results are deliberately COMPACT (trimmed node fields, capped lists) to keep the
 agent's context — and token cost — bounded.

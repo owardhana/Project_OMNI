@@ -9,14 +9,14 @@ Each agent has a defined scope, trigger, and hard constraints.
 
 ```
 MVP agents (built)
-├── QueryAgent       — Text2Cypher, per-request
 ├── CitationAgent    — PubMed PMID enrichment, nightly
 ├── EmbeddingAgent   — semantic-search embeddings, nightly (1am UTC)
 └── ChatAgent        — agentic tool-loop over the graph, streaming, per-request
+                       (the query surface; replaced the single-shot Text2Cypher endpoint)
 
 v2 agents (post-demo)
-├── LiteratureAgent  — bioRxiv/PubMed new edge proposals
-├── ValidationAgent  — scores + gates proposed edges
+├── LiteratureAgent  — PubMed new-edge proposals (design locked — ADR-0013)
+├── ValidationAgent  — scores + gates proposed edges (promotion, P2)
 └── FreshnessAgent   — monitors source DB versions, triggers ETL
 ```
 
@@ -24,57 +24,12 @@ v2 agents (post-demo)
 
 ## MVP Agents
 
-### 1. QueryAgent
+> Natural-language → Cypher querying is no longer a standalone agent. The former
+> single-shot **QueryAgent** (`POST /api/query`, Text2Cypher) was removed once the
+> **ChatAgent** subsumed it: `run_cypher` inside the chat tool-loop does the same
+> NL→Cypher job in-context, validator-gated. See ChatAgent below.
 
-**Role:** Translate user natural language → Cypher → synthesized answer with citations.
-
-**Trigger:** Per user request (HTTP POST /api/query)
-
-**Input:**
-```json
-{
-  "question": "What TFs repress TP53 in liver?",
-  "tissue": "liver",          // optional filter
-  "max_hops": 2               // optional depth
-}
-```
-
-**Flow:**
-```
-user question
-  → system prompt (schema + Cypher examples + rules)
-  → OpenRouter API (anthropic/claude-sonnet-4-6) generates Cypher
-  → validate Cypher syntax (neo4j driver EXPLAIN dry-run)
-  → execute against Neo4j
-  → raw result → OpenRouter API synthesizes natural language answer
-  → attach PMIDs from edge properties to response
-  → return {answer, cypher, results, citations}
-```
-
-**Output:**
-```json
-{
-  "answer": "Three TFs repress TP53 in liver: MDM2 (confidence 0.94), ...",
-  "cypher": "MATCH (tf:Protein)-[r:REGULATES]->(target:Gene)...",
-  "results": [...],
-  "citations": ["12345678", "23456789"]
-}
-```
-
-**Constraints:**
-- Never writes to graph
-- Cypher must be validated before execution (prevent injection)
-- If Cypher invalid after 2 retries → return structured error, not hallucinated answer
-- Max query execution time: 10s timeout
-- No multi-step Cypher chains — single query only for MVP
-
-**Tools:** OpenRouter API, Neo4j driver, Cypher validator
-
-**Files:** `backend/agents/query_agent.py`
-
----
-
-### 2. CitationAgent
+### 1. CitationAgent
 
 **Role:** Enrich existing graph edges with supporting PubMed PMIDs. Never creates new edges or nodes.
 
@@ -115,10 +70,11 @@ fetch batch of edges with no citations
 
 ---
 
-### 3. ChatAgent
+### 2. ChatAgent
 
 **Role:** Conversational, agentic assistant over the graph. Multi-turn, streaming,
-tool-using — the analyst-facing counterpart to QueryAgent's single-shot Text2Cypher.
+tool-using — the analyst-facing query surface (replaced the former single-shot
+Text2Cypher endpoint).
 
 **Trigger:** Per user request (HTTP `POST /api/chat/stream`, Server-Sent Events).
 
@@ -134,8 +90,8 @@ load prior turns (conversational memory) → [system, ...history, user]
 
 **Tools (all READ-ONLY, no write path):** `search_graph` (resolve name→id),
 `get_subgraph` (signal-decay neighbourhood), `shortest_path` (explain how two entities
-connect), `run_cypher` (read-only aggregations — routed through `validate_cypher`, the
-same single-MATCH guard QueryAgent uses).
+connect), `run_cypher` (read-only aggregations — routed through `validate_cypher`, a
+single-MATCH read-only guard).
 
 **Memory:** prior user/assistant *text* turns stored in Neo4j as
 `(:ChatSession {id})-[:HAS_TURN]->(:ChatTurn {role, content, seq, ts})`. Tool calls are

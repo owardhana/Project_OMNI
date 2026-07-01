@@ -57,7 +57,8 @@ No single existing system has all five.
   `CATALYSES`.
 - Signal-decay traversal ([ADR-0005](adr/0005-signal-decay-traversal.md),
   [ADR-0011](adr/0011-backbone-guaranteed-traversal.md)), tissue-as-opacity
-  ([ADR-0006](adr/0006-tissue-as-visual-channel.md)), Text2Cypher query, citation
+  ([ADR-0006](adr/0006-tissue-as-visual-channel.md)), an agentic chat assistant
+  (with an NL→Cypher escape hatch), citation
   + embedding agents, semantic (vector) search ([ADR-0008](adr/0008-neo4j-native-vector-indexing.md)),
   3D layered viz, Entity Browser multi-select, shortest-path finder.
 
@@ -87,7 +88,7 @@ formal record, the ADR is linked.
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
 | LLM API | OpenRouter (OpenAI-compatible) | Single key, model swap without code change |
-| Text2Cypher / synthesis model | `anthropic/claude-sonnet-4.6` | Structured output + graph reasoning |
+| Chat / synthesis model | `anthropic/claude-sonnet-4.6` | Tool-calling + graph reasoning |
 | Citation relevance check | `anthropic/claude-haiku-4.5` | Cheap entity co-mention check |
 | Embeddings | `openai/text-embedding-3-small` (1536-dim) | Semantic search |
 | Agent scheduling | APScheduler inside FastAPI | No extra services |
@@ -120,8 +121,8 @@ vector indexes for semantic search (ADR-0008). Full index list in
 ### Testing
 pytest for backend (Cypher correctness + agent safety are the highest-risk areas);
 manual smoke tests for frontend. `backend/tests/`: `test_queries.py` (Cypher vs
-live Neo4j), `test_agents.py` (citation agent writes PMIDs only), `test_text2cypher.py`
-(benchmark questions → valid Cypher).
+live Neo4j), `test_agents.py` (citation agent writes PMIDs only),
+`test_traversal_bridge.py` (ADR-0011/0012 golden traversal values).
 
 ### Ports (local dev)
 Neo4j Browser 7474 · Neo4j Bolt 7687 · FastAPI 8000 · React (Vite) 3000.
