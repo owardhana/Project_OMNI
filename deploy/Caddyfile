@@ -1,0 +1,28 @@
+# Caddy serves the built SPA and reverse-proxies the API on one origin.
+# SITE_ADDRESS is injected from the environment (docker-compose.prod.yml):
+#   - a real domain (e.g. omni.example.com) -> automatic HTTPS via Let's Encrypt
+#   - ":80" -> plain HTTP (use this when you only have an IP; add a domain later)
+
+{$SITE_ADDRESS} {
+	encode gzip
+
+	# Server-Sent Events (chatbot stream) must NOT be buffered by the proxy, or
+	# tokens arrive all at once at the end. flush_interval -1 = flush immediately.
+	handle /api/chat/stream {
+		reverse_proxy backend:8000 {
+			flush_interval -1
+		}
+	}
+
+	# All other API calls -> FastAPI backend.
+	handle /api/* {
+		reverse_proxy backend:8000
+	}
+
+	# Everything else -> the SPA; unknown paths fall back to index.html (client routing).
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+}

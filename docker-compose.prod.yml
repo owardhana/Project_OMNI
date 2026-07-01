@@ -1,0 +1,75 @@
+# OmniGraph production stack — single-host deploy (Oracle Cloud Ampere A1, arm64).
+#
+#   docker compose -f docker-compose.prod.yml --env-file deploy/.env.prod up -d --build
+#
+# Three services on one box: Neo4j (private), FastAPI backend (private), and Caddy,
+# which is the ONLY public service — it serves the built frontend and reverse-proxies
+# /api to the backend, with automatic HTTPS when SITE_ADDRESS is a real domain.
+#
+# Memory defaults are tuned for the 12 GB free tier: Neo4j heap+pagecache ~6 GB leaves
+# room for the backend + OS. Override in deploy/.env.prod on a bigger (PAYG 24 GB) box.
+
+services:
+  neo4j:
+    image: neo4j:5
+    container_name: omnigraph-neo4j
+    restart: unless-stopped
+    # Bound to LOOPBACK only (127.0.0.1): reachable on the box itself for admin
+    # (cypher-shell) and the host-run ETL crawls, but NEVER from the public internet
+    # (the firewall opens only 80/443, and loopback isn't routable anyway). The backend
+    # reaches it over the compose network as bolt://neo4j:7687.
+    ports:
+      - "127.0.0.1:7687:7687"
+      - "127.0.0.1:7474:7474"
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:?set NEO4J_PASSWORD in deploy/.env.prod}
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_dbms_security_procedures_unrestricted: "apoc.*"
+      NEO4J_server_memory_heap_initial__size: "${NEO4J_HEAP:-3G}"
+      NEO4J_server_memory_heap_max__size: "${NEO4J_HEAP:-3G}"
+      NEO4J_server_memory_pagecache_size: "${NEO4J_PAGECACHE:-3G}"
+    volumes:
+      - neo4j_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+
+  backend:
+    build: ./backend
+    container_name: omnigraph-backend
+    restart: unless-stopped
+    expose:
+      - "8000"
+    env_file:
+      - deploy/.env.prod
+    environment:
+      NEO4J_URI: bolt://neo4j:7687
+    depends_on:
+      neo4j:
+        condition: service_healthy
+
+  web:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.web
+    container_name: omnigraph-web
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      # A real domain -> Caddy gets a Let's Encrypt cert automatically. An IP or
+      # ":80" -> plain HTTP (Let's Encrypt can't issue for bare IPs). See the runbook.
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+    depends_on:
+      - backend
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  neo4j_data:
+  caddy_data:
+  caddy_config:

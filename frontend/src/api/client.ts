@@ -21,7 +21,10 @@ export interface EntityFilters {
   offset?: number;
 }
 
-const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+// `??` (not `||`) so a production build with VITE_API_URL="" keeps an EMPTY base →
+// same-origin relative calls (/api/...), which is how Caddy serves the app + proxies
+// the API on one host. Dev leaves VITE_API_URL unset → falls back to localhost:8000.
+const BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
 
 // Streaming chat (Feature 1). The SSE route is POST (body carries session_id +
 // message), so we read the response body and parse `data: {json}\n\n` frames rather
