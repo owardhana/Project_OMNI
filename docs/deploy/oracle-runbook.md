@@ -156,8 +156,19 @@ export NEO4J_URI=bolt://localhost:7687 NEO4J_PASSWORD=<your NEO4J_PASSWORD>
 nohup etl/.venv/bin/python -u etl/16_gnomad_af.py   > ~/gnomad.log 2>&1 &   # gnomAD AF
 nohup etl/.venv/bin/python -u etl/06_uniprot_enrich.py > ~/uniprot.log 2>&1 &  # protein text
 ```
-Both are resumable (safe to re-run if interrupted). Embeddings then fill in via the
-backend's nightly EmbeddingAgent, or trigger it: `curl -XPOST localhost/api/admin/agents/embedding/run`.
+Both are resumable (safe to re-run if interrupted). **Embeddings need a driven
+backfill, not just the nightly agent:** the transferred graph has ~20k proteins with a
+`summary_text` but no `embedding` (the nightly EmbeddingAgent does one batch of
+`EMBEDDING_AGENT_BATCH_SIZE`=50, which would take months to clear 20k). Two levers:
+raise `EMBEDDING_AGENT_BATCH_SIZE` in `deploy/.env.prod` (re-up the backend), and call
+the run endpoint repeatedly until none remain. Check what's left directly in Neo4j:
+```bash
+docker exec omnigraph-neo4j cypher-shell -u neo4j -p "$NEO4J_PASSWORD" \
+  "MATCH (p:Protein) WHERE p.summary_text IS NOT NULL AND p.embedding IS NULL RETURN count(p)"
+# then, until that count is 0:
+curl -s -XPOST localhost/api/admin/agents/embedding/run
+```
+(~1–2h and ~$0.20 total for text-embedding-3-small once the batch size is raised.)
 
 **Keep-alive cron (avoids the 7-day idle deletion on free tier):** generate a little
 traffic/CPU periodically so Oracle doesn't flag the box idle.
@@ -182,6 +193,8 @@ docker compose -f docker-compose.prod.yml --env-file deploy/.env.prod up -d --bu
 
 | Symptom | Fix |
 |---------|-----|
+| **SSH itself times out** after editing the Security List (timeout, not "refused") | You broke the default **port-22** ingress rule. Re-add ingress: Source `0.0.0.0/0`, TCP, **Destination** port `22` (a classic slip is typing 22 in *Source* port), **Stateless = No**. Confirm it's the SL attached to *this VM's subnet* (Instance → Attached VNICs → VNIC → Subnet). |
+| Pasted Phase 4 block silently skipped `git clone` (empty home dir) | `newgrp docker` opens a subshell that **swallows the rest of a pasted block**. Run the `git clone` lines on their own, or `exit` and re-SSH first (re-login also activates docker-group membership, so `docker` works without sudo). |
 | SSH works, site doesn't load | Firewall — you missed Phase **3b** (iptables) or **3a** (Security List). |
 | "Out of host capacity" on create | Retry / different AD / different region (Phase 2 note). |
 | Backend unhealthy, Neo4j OOM | Lower `NEO4J_HEAP`/`NEO4J_PAGECACHE` in `deploy/.env.prod` (try 2G/3G) and re-up. 12 GB is tight. |
