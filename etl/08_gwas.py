@@ -72,12 +72,19 @@ def variant_key(snps, chr_id, chr_pos) -> str | None:
 
 
 def parse_traits(uri_field, name_field) -> list[tuple[str, str]]:
-    """(ontology_id, name) pairs from comma-separated MAPPED_TRAIT_URI / MAPPED_TRAIT.
+    """(ontology_id, name) pairs from MAPPED_TRAIT_URI / MAPPED_TRAIT.
 
     ontology_id is the last URL path segment (EFO_0001360, Orphanet_..., MONDO_...).
+
+    The GWAS Catalog separates multiple mapped traits with ", " (comma-SPACE). Trait
+    names can contain BARE commas (chemical names, e.g.
+    "1,4-dihydro-1-Methyl-4-oxo-3-pyridinecarboxamide measurement"), so splitting on a
+    bare "," fragments those names and misaligns them with their URIs — producing junk
+    Disease.name values like "1" or "4-androsten-3alpha". Splitting on ", " keeps such
+    names intact and stays index-aligned with the URIs (URLs never contain ", ").
     """
-    uris = [u.strip() for u in str(uri_field).split(",") if u.strip()]
-    names = [n.strip() for n in str(name_field).split(",")]
+    uris = [u.strip() for u in str(uri_field).split(", ") if u.strip()]
+    names = [n.strip() for n in str(name_field).split(", ")]
     out: list[tuple[str, str]] = []
     for i, uri in enumerate(uris):
         if uri.lower() == "nan":
@@ -85,7 +92,10 @@ def parse_traits(uri_field, name_field) -> list[tuple[str, str]]:
         oid = uri.rstrip("/").split("/")[-1]
         if not oid or oid.lower() == "nan":
             continue
-        name = names[i] if i < len(names) and names[i] else (names[0] if names and names[0] else oid)
+        name = names[i] if i < len(names) else ""
+        # A purely-numeric or empty name is a parse artifact -> fall back to the id.
+        if not name or name.isdigit():
+            name = oid
         out.append((oid, name))
     return out
 
