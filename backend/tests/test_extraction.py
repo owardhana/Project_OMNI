@@ -65,6 +65,18 @@ def test_short_symbol_is_case_sensitive():
     assert "EGFR" in {m.surface for m in _gaz().match("EGFR was measured")}
 
 
+def test_bare_number_surface_gated():
+    # Junk single-token Disease.name values like "2" must never match (they'd hit
+    # every number in prose). Found in the #17 live disease-surface audit.
+    g = Gazetteer.from_entries([
+        Entry("2", "EFO_JUNK", "disease", "2"),
+        Entry("TP53", "ENSG1", "gene", "TP53"),
+    ])
+    surfaces = {m.surface for m in g.match("TP53 increased 2 fold in the assay")}
+    assert "2" not in surfaces
+    assert "TP53" in surfaces
+
+
 def test_generic_disease_word_gated_standalone():
     # bare "cancer" must NOT match (floods prose)...
     assert "cancer" not in {m.surface for m in _gaz().match("the risk of cancer rises")}

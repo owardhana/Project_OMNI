@@ -134,6 +134,10 @@ class Gazetteer:
 
 def _passes_gate(surface: str, entries: list[Entry]) -> bool:
     """Filter false positives from short/ambiguous/generic surfaces."""
+    if surface.isdigit():
+        # bare numbers are never entity mentions; they appear as junk single-token
+        # Disease.name values ('1','2','3') and would match every number in prose.
+        return False
     if surface.lower() in GENERIC_TERMS:
         # generic disease word standalone -> drop (a longer phrase would have won
         # the longest-match already).
