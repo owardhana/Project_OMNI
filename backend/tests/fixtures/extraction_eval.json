@@ -1,0 +1,72 @@
+{
+  "_note": "Labelled abstracts for the literature-extraction precision/recall gate (Feature 2 #16). Closed-world: `entities` seed a fixture Gazetteer offline (no graph). `gold` = the triples a perfect extractor should assert (affirm/negate/hedge); empty gold = a precision trap (co-mention but no asserted relation, or <2 entities). Starter set — expand toward 30-50, esp. disease-linking + negation.",
+  "entities": [
+    {"surface": "MDM2", "id": "P_MDM2", "kind": "protein", "canonical": "MDM2"},
+    {"surface": "p53", "id": "P_TP53", "kind": "protein", "canonical": "p53"},
+    {"surface": "BRCA1", "id": "P_BRCA1", "kind": "protein", "canonical": "BRCA1"},
+    {"surface": "EGFR", "id": "P_EGFR", "kind": "protein", "canonical": "EGFR"},
+    {"surface": "AKT1", "id": "P_AKT1", "kind": "protein", "canonical": "AKT1"},
+    {"surface": "MTOR", "id": "P_MTOR", "kind": "protein", "canonical": "MTOR"},
+    {"surface": "CFTR", "id": "G_CFTR", "kind": "gene", "canonical": "CFTR"},
+    {"surface": "APOE", "id": "G_APOE", "kind": "gene", "canonical": "APOE"},
+    {"surface": "TP53", "id": "G_TP53", "kind": "gene", "canonical": "TP53"},
+    {"surface": "MTHFR", "id": "G_MTHFR", "kind": "gene", "canonical": "MTHFR"},
+    {"surface": "cystic fibrosis", "id": "D_CF", "kind": "disease", "canonical": "cystic fibrosis"},
+    {"surface": "Alzheimer disease", "id": "D_AD", "kind": "disease", "canonical": "Alzheimer disease"},
+    {"surface": "Li-Fraumeni syndrome", "id": "D_LFS", "kind": "disease", "canonical": "Li-Fraumeni syndrome"},
+    {"surface": "stroke", "id": "D_STROKE", "kind": "disease", "canonical": "stroke"},
+    {"surface": "type 2 diabetes", "id": "D_T2D", "kind": "disease", "canonical": "type 2 diabetes"}
+  ],
+  "cases": [
+    {
+      "pmid": "F0001",
+      "text": "MDM2 binds and negatively regulates p53.",
+      "gold": [{"edge_type": "INTERACTS_WITH", "subject_id": "P_MDM2", "object_id": "P_TP53", "polarity": "affirm"}]
+    },
+    {
+      "pmid": "F0002",
+      "text": "BRCA1 does not interact with EGFR in this assay.",
+      "gold": [{"edge_type": "INTERACTS_WITH", "subject_id": "P_BRCA1", "object_id": "P_EGFR", "polarity": "negate"}]
+    },
+    {
+      "pmid": "F0003",
+      "text": "Mutations in CFTR cause cystic fibrosis.",
+      "gold": [{"edge_type": "IMPLICATED_IN", "subject_id": "G_CFTR", "object_id": "D_CF", "polarity": "affirm"}]
+    },
+    {
+      "pmid": "F0004",
+      "text": "APOE may be associated with Alzheimer disease.",
+      "gold": [{"edge_type": "IMPLICATED_IN", "subject_id": "G_APOE", "object_id": "D_AD", "polarity": "hedge"}]
+    },
+    {
+      "pmid": "F0005",
+      "text": "TP53 is implicated in Li-Fraumeni syndrome.",
+      "gold": [{"edge_type": "IMPLICATED_IN", "subject_id": "G_TP53", "object_id": "D_LFS", "polarity": "affirm"}]
+    },
+    {
+      "pmid": "F0006",
+      "text": "The AKT1 and MTOR complex drives cell growth.",
+      "gold": [{"edge_type": "INTERACTS_WITH", "subject_id": "P_AKT1", "object_id": "P_MTOR", "polarity": "affirm"}]
+    },
+    {
+      "pmid": "F0007",
+      "text": "No association was found between MTHFR and stroke.",
+      "gold": [{"edge_type": "IMPLICATED_IN", "subject_id": "G_MTHFR", "object_id": "D_STROKE", "polarity": "negate"}]
+    },
+    {
+      "pmid": "F0008",
+      "text": "We measured p53 and EGFR expression levels across the cohort.",
+      "gold": []
+    },
+    {
+      "pmid": "F0009",
+      "text": "Patients with type 2 diabetes were enrolled in the trial.",
+      "gold": []
+    },
+    {
+      "pmid": "F0010",
+      "text": "The study included 200 participants over two years.",
+      "gold": []
+    }
+  ]
+}
