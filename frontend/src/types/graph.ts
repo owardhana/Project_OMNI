@@ -113,6 +113,9 @@ export interface GraphEdge {
   role?: string | null; // CATALYSES: 'substrate' | 'product'
   reaction_id?: string | null; // CATALYSES: Recon3D reaction id
   source_db?: string | null;
+  // 'literature' = machine-proposed edge promoted from literature (ADR-0013);
+  // absent/null = canonical consortium data. Drives the "proposed" edge styling.
+  provenance_tier?: string | null;
   pmids: string[];
   citation_attempted: boolean;
 }

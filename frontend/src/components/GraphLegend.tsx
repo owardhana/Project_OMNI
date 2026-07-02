@@ -42,7 +42,7 @@ const EDGE_LABEL: Record<string, { label: string; color: string }> = {
 export default function GraphLegend({ data }: { data: ForceGraphData }) {
   const [open, setOpen] = useState(true);
 
-  const { nodeTypes, hasTF, edgeTypes } = useMemo(() => {
+  const { nodeTypes, hasTF, edgeTypes, hasProposed } = useMemo(() => {
     const nt = new Set<string>();
     let tf = false;
     for (const n of data.nodes) {
@@ -50,8 +50,12 @@ export default function GraphLegend({ data }: { data: ForceGraphData }) {
       if (n.node_type === 'protein' && n.subtype === 'transcription_factor') tf = true;
     }
     const et = new Set<string>();
-    for (const l of data.links) et.add(l.rel_type);
-    return { nodeTypes: [...nt], hasTF: tf, edgeTypes: [...et] };
+    let proposed = false;
+    for (const l of data.links) {
+      et.add(l.rel_type);
+      if (l.provenance_tier === 'literature') proposed = true;
+    }
+    return { nodeTypes: [...nt], hasTF: tf, edgeTypes: [...et], hasProposed: proposed };
   }, [data]);
 
   if (data.nodes.length === 0) return null;
@@ -82,7 +86,7 @@ export default function GraphLegend({ data }: { data: ForceGraphData }) {
               </span>
             ))}
           </div>
-          {edgeTypes.length > 0 && (
+          {(edgeTypes.length > 0 || hasProposed) && (
             <div className="legend-group legend-edges">
               {edgeTypes
                 .filter((e) => EDGE_LABEL[e])
@@ -92,6 +96,12 @@ export default function GraphLegend({ data }: { data: ForceGraphData }) {
                     {EDGE_LABEL[e].label}
                   </span>
                 ))}
+              {hasProposed && (
+                <span className="legend-item" title="Machine-proposed from literature (ADR-0013)">
+                  <i className="edge-swatch" style={{ background: EDGE_COLORS.proposed }} />
+                  Proposed
+                </span>
+              )}
             </div>
           )}
         </div>

@@ -83,6 +83,8 @@ function hexToRgba(hex: string, alpha: number): string {
 // ADR-0006). All other edges keep a base opacity regardless of tissue.
 function linkAlpha(link: FGLink, activeTissue: string): number {
   const base = 0.5;
+  // Proposed (literature-tier) edges render faint/ghostly — tentative, not truth.
+  if (link.provenance_tier === 'literature') return 0.3;
   if (activeTissue === 'all' || link.rel_type !== 'PRODUCES') return base;
   const key = TISSUE_KEY[activeTissue];
   const tw = link.tissue_weights?.[key];
@@ -324,6 +326,7 @@ export default function GraphViewer3D({
       // thinnest (amber, cancer context — react-force-graph-3d has no linkDash,
       // so colour+width carry the distinction per ADR-0009 / Phase-8 spec).
       linkWidth={(l: FGLink) => {
+        if (l.provenance_tier === 'literature') return 0.8 * 0.4; // proposed — thin
         if (l.rel_type === 'INTERACTS_WITH') return 0.8 * 0.6;
         if (l.rel_type === 'CATALYSES') return 0.8 * 0.7;
         if (l.rel_type === 'DIFFERENTIALLY_EXPRESSED') return 0.8 * 0.5;

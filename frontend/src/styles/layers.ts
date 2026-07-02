@@ -76,6 +76,7 @@ export const EDGE_COLORS = {
   implicated_in: '#fb923c',
   catalyses: '#22d3ee', // cyan — enzymatic Protein->Metabolite (matches metabolite node; ADR-0009)
   differentially_expressed: '#f59e0b', // amber — TCGA cancer DE (Gene->Disease)
+  proposed: '#fde047', // pale yellow — machine-PROPOSED literature edge (ADR-0013), rendered faint
   unknown: '#9ca3af',
 };
 
@@ -136,6 +137,9 @@ export function nodeShape(node: GraphNode): NodeShape {
 }
 
 export function edgeColor(link: FGLink): string {
+  // Literature-proposed edges (ADR-0013) get one recognisable colour regardless of
+  // rel_type, so a user never mistakes a machine proposal for consortium truth.
+  if (link.provenance_tier === 'literature') return EDGE_COLORS.proposed;
   switch (link.rel_type) {
     case 'PRODUCES':
       return EDGE_COLORS.produces;

@@ -409,6 +409,21 @@
   color: var(--text);
   padding-right: 18px;
 }
+/* Machine-proposed (literature-extracted) edge — visually flagged so it is never
+   mistaken for consortium truth (ADR-0013). Matches the pale-yellow edge colour. */
+.edge-proposed {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 10px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #854d0e;
+  background: rgba(253, 224, 71, 0.18);
+  border: 1px solid rgba(253, 224, 71, 0.55);
+}
 .edge-row {
   display: flex;
   justify-content: space-between;

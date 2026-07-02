@@ -30,6 +30,11 @@ export default function EdgeDetailPanel({ link, onClose }: Props) {
       <div className="edge-panel-title">
         {endpointLabel(link.source)} → {endpointLabel(link.target)}
       </div>
+      {link.provenance_tier === 'literature' && (
+        <div className="edge-proposed" title="Machine-proposed from literature, not consortium data (ADR-0013)">
+          ⚠ Proposed — literature-extracted, not consortium data
+        </div>
+      )}
       <div className="edge-row">
         <span className="edge-key">Type</span>
         <span>{link.rel_type}</span>
