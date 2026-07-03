@@ -185,6 +185,9 @@ OmniGraph cannot be fully curated manually. Two production roles plus one future
   existing edge; attaches PMIDs. Never creates edges.
 - **Embedding agent** (scheduled) — embeds node `summary_text`/`description` for
   semantic search. Writes only embedding/provenance properties.
-- **Extraction agent** (future) — reads new papers, proposes new edges as
-  validated candidates. Requires a separate design session (NLP pipeline +
-  validation queue).
+- **Extraction agent** (Feature 2, P1+P2 built, OFF by default) — reads new papers,
+  proposes new edges as `:CandidateEdge` (staging, never trusted topology). The
+  **ValidationAgent** promotes reviewed candidates to real edges tagged
+  `provenance_tier='literature'`. See
+  [`docs/design/feature-2-literature-extraction.md`](design/feature-2-literature-extraction.md)
+  + [ADR-0013](adr/0013-literature-extraction-trust-model.md).

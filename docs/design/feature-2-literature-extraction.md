@@ -1,10 +1,12 @@
 # Design — Literature Extraction Agent (Feature 2)
 
-Status: **Design locked, not started.** A grill-with-docs session (2026-07-01) walked
-the full design tree and locked 9 decisions. This is now an *implementation plan*, not
-a brainstorm. The trust/provenance model is captured separately in
-[ADR-0013](../adr/0013-literature-extraction-trust-model.md) (write it before promotion
-is built). No code exists yet.
+Status: **P1 + P2 BUILT (2026-07-02), OFF by default. P3 remaining.** A grill-with-docs
+session (2026-07-01) locked 9 decisions; P1 (extraction→staging) and P2 (promotion +
+tier discount + "proposed" rendering) were then built on branch
+`feat/literature-extraction-mvp`. The whole feature is gated OFF
+(`EXTRACTION_AGENT_ENABLED=false`) — nothing spends or writes without opting in. Trust
+model: [ADR-0013](../adr/0013-literature-extraction-trust-model.md). See **Phasing** for
+what's built vs. remaining (P3).
 
 ## Goal
 
@@ -125,10 +127,10 @@ topology leak — see firewall invariant in ADR-0013).
 - **`IMPLICATED_IN` has a pre-existing, different meaning.** CONTEXT.md defines it as a
   *GWAS-aggregated* gene→disease rollup; `traversal.py:62` gives it a flat `0.5`
   conductance. A literature "gene X implicated in Y" is a *qualitative textual claim*.
-  `provenance_tier` separates the source but not the semantics. **ADR-0013 must decide**
-  what conductance a promoted literature `IMPLICATED_IN` carries (recommendation: a
-  discount vs canonical, keyed on `provenance_tier`). Does not bite at MVP (staging
-  only, no promotion) — but must be resolved before P2.
+  `provenance_tier` separates the source but not the semantics. **RESOLVED (ADR-0013,
+  built P2):** `_conductance` applies a `LITERATURE_CONDUCTANCE_FACTOR` discount keyed on
+  `provenance_tier`, so a promoted literature `IMPLICATED_IN` conducts less than the
+  GWAS-aggregated one under one shared label.
 - **Disease linking is materially harder than gene.** EFO labels ("type 2 diabetes
   mellitus") ≠ how papers phrase them ("T2D", "diabetic"). `IMPLICATED_IN` recall will
   lag `INTERACTS_WITH`. Fixtures **must** include disease-linking cases, and the metric
@@ -153,11 +155,40 @@ CPU (llama.cpp, ARM) actually matter. See [cloud-migration.md](cloud-migration.m
 
 ## Phasing
 
-1. **P1 (this design) — extraction-to-staging, local.** Nightly delta → CandidateEdge,
-   no promotion. Dictionary + matcher + relation extractor + fixtures + measured
-   precision/recall. ADR-0013 (trust model) lands here.
-2. **P2 — promotion gate.** Admin review queue + auto-promote policy once precision is
-   known; enrichment path (`INTERACTS_WITH`/`IMPLICATED_IN` PMID append) + the
-   `IMPLICATED_IN` conductance decision; frontend "proposed" edge rendering.
-3. **P3 — backfill + more edge types + host.** Throttled historical pull, tiered
-   models, `CATALYSES`/`REGULATES`/`ASSOCIATED_WITH`, Oracle host + real cron.
+1. **P1 — extraction-to-staging, local. ✅ BUILT.** `backend/extraction/{dictionary,
+   ingest,relation,stage,eval}.py` + `agents/extraction_agent.py` + admin trigger.
+   Nightly delta → `CandidateEdge`, no promotion. `01_hgnc` alias backfill done;
+   `p53`→TP53 resolves live; leak assertion holds. Precision harness gated behind
+   `RUN_EXTRACTION_EVAL` (uncalibrated — not yet run). ADR-0013 written.
+2. **P2 — promotion gate. ✅ BUILT (mechanism; auto-promote OFF).**
+   `agents/validation_agent.py`: promote `CandidateEdge` → real edge tagged
+   `provenance_tier='literature'`; reuse `trusted_edge_exists` (enrich-not-duplicate);
+   manual approve/reject (`POST /admin/candidates/{tk}/{approve,reject}`);
+   `LITERATURE_CONDUCTANCE_FACTOR` discount in `_conductance`; frontend "proposed"
+   rendering (pale-yellow faint/thin edge + EdgeDetailPanel badge + legend). Auto-promote
+   default-OFF until the precision number exists.
+3. **P3 — backfill + more edge types + host. ⏳ REMAINING.**
+   - **Calibrate auto-promote first:** run `RUN_EXTRACTION_EVAL` on an expanded labelled
+     set (30–50, disease-linking-heavy), set `VALIDATION_AUTO_PROMOTE_CONFIDENCE` from
+     measured precision, then consider enabling `VALIDATION_AUTO_PROMOTE_ENABLED`.
+   - **Backfill:** throttled historical pull (millions of papers). This is the expensive
+     tier — add the cheap-screen→strong-confirm two-tier + possibly a quantized local
+     model on the host CPU (llama.cpp, ARM). Nightly stays near-free.
+   - **More edge types:** `CATALYSES` (protein→metabolite), `REGULATES` (needs a "which
+     entity is the TF" sub-check — the graph already knows the TF subtype),
+     `ASSOCIATED_WITH` (needs rsid mentions, sparse in abstracts). Each is a new
+     `edge_type_for` kind-pair + relation-desc + `_KIND_MAP`/direction entry.
+   - **Host + cron:** move the nightly run onto the Oracle box with a real scheduler
+     (currently manual/local). See [cloud-migration.md](cloud-migration.md).
+   - **Admin review UI:** a surface over `GET /admin/agents/extraction/candidates` for
+     human approve/reject at scale (endpoints exist; no UI yet).
+   - **Expand the disease-generic gate** to be data-driven (single-token `Disease.name`
+     audit) rather than the hardcoded `GENERIC_TERMS` floor.
+
+### Known limitation to revisit when the feature is enabled
+
+A promoted literature `INTERACTS_WITH` has no `combined_score`, so `_edge_rank` (which
+ranks the dense-capped `INTERACTS_WITH` frontier by `combined_score`) may cap it out of
+a traversal — meaning the conductance discount could rarely fire on real views. Not a
+correctness bug (staging/promotion are correct); it's a "does the proposed edge surface"
+question to check once real literature edges exist.

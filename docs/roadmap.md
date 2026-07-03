@@ -99,13 +99,16 @@ laptop contention, so the always-on box is their proper home. Both are resumable
 - **GTEx tissue panel expansion**, **co-expression networks**
   (`CO_EXPRESSED_WITH`, needs TCGA+GTEx counts in one pipeline), **cell-type
   resolution** (indefinitely deferred — data too noisy vs tissue level).
-- **Literature extraction agent** — new-edge proposals. Design **locked** (grill
-  session 2026-07-01): closed-world, dictionary-linked, 2 edge types
-  (`INTERACTS_WITH`+`IMPLICATED_IN`), cheap-LLM relation gate, `:CandidateEdge`
-  staging, local-only MVP. Plan:
-  [`docs/design/feature-2-literature-extraction.md`](design/feature-2-literature-extraction.md);
-  trust model: [ADR-0013](adr/0013-literature-extraction-trust-model.md). Build is the
-  next session (P1 = extraction-to-staging; promotion gate + backfill are P2/P3).
+- **Literature extraction agent** — new-edge proposals. **P1 + P2 BUILT (2026-07-02),
+  OFF by default** on branch `feat/literature-extraction-mvp`: closed-world,
+  dictionary-linked, 2 edge types (`INTERACTS_WITH`+`IMPLICATED_IN`), cheap-LLM relation
+  gate, `:CandidateEdge` staging (P1); `ValidationAgent` promotion + `provenance_tier`
+  conductance discount + "proposed" edge rendering (P2, auto-promote off/uncalibrated).
+  Plan: [`docs/design/feature-2-literature-extraction.md`](design/feature-2-literature-extraction.md);
+  trust model: [ADR-0013](adr/0013-literature-extraction-trust-model.md).
+  **Remaining (P3):** calibrate auto-promote (run `RUN_EXTRACTION_EVAL`), historical
+  backfill + tiered models, more edge types (`CATALYSES`/`REGULATES`/`ASSOCIATED_WITH`),
+  Oracle host + cron, admin review UI.
 - **Horizontal metabolite reach-through for pure-TF seeds** — surfacing
   metabolites that belong to a TF's regulated genes. Explicitly rejected as the
   current floor (semantically muddier; ADR-0011 "Rejected alternatives"); the
