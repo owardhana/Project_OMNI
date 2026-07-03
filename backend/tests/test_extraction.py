@@ -155,8 +155,8 @@ def test_triple_key_symmetric_and_directed():
 
 
 class _M:  # minimal stand-in for a dictionary.Match (only .candidates is used)
-    def __init__(self, entry):
-        self.candidates = [entry]
+    def __init__(self, *entries):
+        self.candidates = list(entries)
 
 
 def test_resolve_entities_dedupes_by_node_id():
@@ -165,6 +165,19 @@ def test_resolve_entities_dedupes_by_node_id():
     egfr = Entry("EGFR", "ENSG2", "gene", "EGFR")
     ents = _resolve_entities([_M(tp53_gene), _M(tp53_again), _M(egfr)])
     assert {e.node_id for e in ents} == {"ENSG1", "ENSG2"}
+
+
+def test_gene_protein_duality_enables_interacts_pair():
+    # Mirrors build_gazetteer_from_graph: a symbol resolves to BOTH a gene and a
+    # protein node. _resolve_entities must keep both candidates, else INTERACTS_WITH
+    # (protein-protein) can never form and the extractor is IMPLICATED_IN-only.
+    mdm2 = _M(Entry("MDM2", "ENSG_M", "gene", "MDM2"), Entry("MDM2", "P_MDM2", "protein", "MDM2"))
+    tp53 = _M(Entry("TP53", "ENSG_T", "gene", "TP53"), Entry("TP53", "P_TP53", "protein", "TP53"))
+    ents = _resolve_entities([mdm2, tp53])
+    assert len(ents) == 4  # 2 genes + 2 proteins, all distinct node_ids
+    kinds = {frozenset({a.kind, b.kind}) for a, b in _candidate_pairs(ents)}
+    assert frozenset({"protein"}) in kinds        # protein-protein INTERACTS_WITH fires
+    assert frozenset({"gene"}) not in kinds        # gene-gene is out of vocab
 
 
 def test_candidate_pairs_filters_selfpairs_and_out_of_vocab():

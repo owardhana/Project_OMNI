@@ -33,12 +33,19 @@ logger = logging.getLogger(__name__)
 
 
 def _resolve_entities(matches) -> list[Entry]:
-    """One Entry per match (best candidate), de-duplicated by node_id (order-preserving).
-    Collapsing on node_id means the same molecule mentioned twice is one entity."""
+    """All resolved entities in the text, de-duplicated by node_id.
+
+    A surface routinely resolves to *several* nodes — most importantly a symbol like
+    ``TP53`` is BOTH a gene and a protein (built as separate nodes by the gazetteer).
+    Keeping every candidate (not just ``candidates[0]``) is essential: it's what lets
+    ``_candidate_pairs`` form the protein-protein pair for ``INTERACTS_WITH``. Dropping
+    to the first candidate (the gene) makes protein-protein pairs impossible, so the
+    extractor would only ever produce ``IMPLICATED_IN``.
+    """
     seen: dict[str, Entry] = {}
     for m in matches:
-        entry = m.candidates[0]  # ambiguity refinement deferred; take best candidate
-        seen.setdefault(entry.node_id, entry)
+        for entry in m.candidates:
+            seen.setdefault(entry.node_id, entry)
     return list(seen.values())
 
 
@@ -71,9 +78,11 @@ class ExtractionAgent(BaseAgent):
             gazetteer = await build_gazetteer_from_graph(session)
         logger.info("ExtractionAgent: gazetteer surfaces=%d", len(gazetteer))
 
+        # Keys 'candidate'/'enriched'/'skipped' match stage_verdict's returned status
+        # exactly, so `stats[status] += 1` lands in the right bucket.
         stats = {
             "pmids_fetched": 0, "articles": 0, "sentences_scanned": 0,
-            "pairs_evaluated": 0, "candidates": 0, "enriched": 0, "skipped": 0,
+            "pairs_evaluated": 0, "candidate": 0, "enriched": 0, "skipped": 0,
         }
         delay = request_delay()
 
