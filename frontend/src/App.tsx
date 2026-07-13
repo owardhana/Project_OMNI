@@ -7,7 +7,7 @@ import EntityBrowser from './components/EntityBrowser';
 import GraphLegend from './components/GraphLegend';
 import GraphViewer3D from './components/GraphViewer3D';
 import LayerToggle from './components/LayerToggle';
-import NodeDetailPanel from './components/NodeDetailPanel';
+import EntityInspector from './components/EntityInspector';
 import ChatPanel from './components/ChatPanel';
 import SearchBar from './components/SearchBar';
 import ShortcutsOverlay from './components/ShortcutsOverlay';
@@ -254,7 +254,7 @@ export default function App() {
       )}
       {shortcutsOpen && <ShortcutsOverlay onClose={() => setShortcutsOpen(false)} />}
 
-      <NodeDetailPanel
+      <EntityInspector
         node={selectedNode}
         graphData={graphData}
         onClose={() => setSelectedNode(null)}
