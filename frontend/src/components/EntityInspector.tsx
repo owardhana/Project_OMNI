@@ -135,25 +135,52 @@ function Overview({ node }: { node: FGNode }) {
 // Annotations tab: subcellular location + GO/pathway membership (Pillar 1a/1b,
 // ADR-0015). Today single-value from UniProt; multi-value + scores once loaded.
 function Annotations({ node }: { node: FGNode }) {
-  if (node.node_type !== 'protein') {
-    return <p className="muted">No annotations for this entity type.</p>;
+  if (node.node_type === 'protein') {
+    const locs = node.subcellular_locs ?? [];
+    const scores = node.subcellular_loc_scores ?? [];
+    const pathways = node.reactome_pathways ?? [];
+    return (
+      <>
+        <div className="anno-label">Subcellular location</div>
+        {locs.length > 0 ? (
+          <div className="chip-row">
+            {locs.map((loc, i) => (
+              <span key={loc} className="go-chip">
+                {loc}
+                {scores[i] != null && <span className="chip-score">{scores[i].toFixed(2)}</span>}
+              </span>
+            ))}
+          </div>
+        ) : (
+          <p className="muted">{node.subcellular_loc ?? 'No localization data.'}</p>
+        )}
+        <div className="anno-label">Reactome pathways ({pathways.length})</div>
+        {pathways.length > 0 ? (
+          <ul className="anno-list">
+            {pathways.slice(0, 20).map((p) => <li key={p}>{p}</li>)}
+          </ul>
+        ) : (
+          <p className="muted">None.</p>
+        )}
+      </>
+    );
   }
-  return (
-    <>
-      <dl className="node-fields">
-        <dt>Subcellular</dt><dd>{node.subcellular_loc ?? '—'}</dd>
-      </dl>
-      {node.go_terms && node.go_terms.length > 0 ? (
-        <div className="chip-row">
-          {node.go_terms.map((go) => (
-            <span key={go} className="go-chip">{go}</span>
-          ))}
-        </div>
-      ) : (
-        <p className="muted">No GO / pathway annotations.</p>
-      )}
-    </>
-  );
+  if (node.node_type === 'gene') {
+    const bp = node.go_bp_terms ?? [];
+    return (
+      <>
+        <div className="anno-label">GO biological process ({bp.length})</div>
+        {bp.length > 0 ? (
+          <ul className="anno-list">
+            {bp.slice(0, 25).map((t) => <li key={t}>{t}</li>)}
+          </ul>
+        ) : (
+          <p className="muted">No GO:BP terms.</p>
+        )}
+      </>
+    );
+  }
+  return <p className="muted">No annotations for this entity type.</p>;
 }
 
 function title(node: FGNode): { name: string; sub: string; tf: boolean } {
@@ -213,7 +240,7 @@ export default function EntityInspector({ node, graphData, onClose, onExpand }: 
   for (const name of ['Interactions', 'Regulation', 'Metabolism', 'Disease']) {
     if (grouped[name]?.length) tabs.push(name);
   }
-  if (isProtein) tabs.push('Annotations');
+  if (isProtein || node.node_type === 'gene') tabs.push('Annotations');
   if (literature.length) tabs.push('Literature');
   const activeTab = tabs.includes(active) ? active : 'Overview';
 

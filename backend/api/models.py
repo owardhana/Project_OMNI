@@ -35,6 +35,7 @@ class GeneNode(BaseModel):
     is_tf: bool = False
     pli_score: Optional[float] = None
     cancer_gene: Optional[bool] = None
+    go_bp_terms: list[str] = Field(default_factory=list)  # MSigDB C5 GO:BP (Pillar 1b)
     node_type: Literal["gene"] = "gene"
     layer_z: int = GENE_LAYER_Z
 
@@ -58,7 +59,11 @@ class ProteinNode(BaseModel):
     subtype: Optional[str] = None
     summary_text: Optional[str] = None
     go_terms: list[str] = Field(default_factory=list)
-    subcellular_loc: Optional[str] = None
+    subcellular_loc: Optional[str] = None  # legacy single value (UniProt, 06_uniprot_enrich)
+    # Pillar 1a (ADR-0015): scored multi-value localization from ComPPI, index-aligned.
+    subcellular_locs: list[str] = Field(default_factory=list)
+    subcellular_loc_scores: list[float] = Field(default_factory=list)
+    reactome_pathways: list[str] = Field(default_factory=list)  # Pillar 1b (Reactome)
     molecular_weight: Optional[float] = None
     node_type: Literal["protein"] = "protein"
     layer_z: int = PROTEIN_LAYER_Z
@@ -246,6 +251,7 @@ def gene_node_from_props(props: dict, is_tf: bool) -> GeneNode:
         is_tf=is_tf,
         pli_score=props.get("pli_score"),
         cancer_gene=props.get("cancer_gene"),
+        go_bp_terms=list(props.get("go_bp_terms") or []),
     )
 
 
@@ -268,6 +274,9 @@ def protein_node_from_props(props: dict) -> ProteinNode:
         summary_text=props.get("summary_text"),
         go_terms=list(props.get("go_terms") or []),
         subcellular_loc=props.get("subcellular_loc"),
+        subcellular_locs=list(props.get("subcellular_locs") or []),
+        subcellular_loc_scores=list(props.get("subcellular_loc_scores") or []),
+        reactome_pathways=list(props.get("reactome_pathways") or []),
         molecular_weight=props.get("molecular_weight"),
     )
 

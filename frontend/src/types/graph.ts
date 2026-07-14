@@ -11,6 +11,7 @@ export interface GeneNode {
   is_tf: boolean;
   pli_score?: number | null;
   cancer_gene?: boolean | null;
+  go_bp_terms?: string[]; // MSigDB C5 GO:BP (Pillar 1b)
   node_type: 'gene';
   layer_z: number;
 }
@@ -32,7 +33,10 @@ export interface ProteinNode {
   subtype?: string | null; // 'transcription_factor' in MVP
   summary_text?: string | null;
   go_terms?: string[];
-  subcellular_loc?: string | null;
+  subcellular_loc?: string | null; // legacy single value
+  subcellular_locs?: string[]; // Pillar 1a — scored multi-value (ComPPI)
+  subcellular_loc_scores?: number[]; // index-aligned with subcellular_locs
+  reactome_pathways?: string[]; // Pillar 1b — Reactome
   molecular_weight?: number | null;
   node_type: 'protein';
   layer_z: number;
