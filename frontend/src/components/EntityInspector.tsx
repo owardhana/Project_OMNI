@@ -211,7 +211,9 @@ function title(node: FGNode): { name: string; sub: string; tf: boolean } {
     case 'metabolite':
       return { name: node.name ?? node.hmdb_id ?? node.id, sub: `${node.hmdb_id ?? node.chebi_id ?? node.id} · Metabolite`, tf: false };
     default:
-      return { name: node.id, sub: '', tf: false };
+      // Unreachable: the cases above are exhaustive over node_type, so `node` is
+      // narrowed to `never` here. Cast back to read `id` for the defensive fallback.
+      return { name: (node as FGNode).id, sub: '', tf: false };
   }
 }
 
