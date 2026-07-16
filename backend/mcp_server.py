@@ -23,6 +23,7 @@ Run:
 import json
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 from backend.agents.tools import (
     _get_subgraph,
@@ -32,7 +33,18 @@ from backend.agents.tools import (
 )
 from backend.db.queries.traversal import signal_decay_subgraph
 
-mcp = FastMCP("OmicGraph")
+# This server is a DELIBERATELY PUBLIC, read-only surface reached over HTTP/SSE behind
+# Caddy (ADR-0017). The MCP SDK enables DNS-rebinding protection by default and only
+# accepts localhost Host headers, so a proxied request (Host: the public domain/IP) is
+# rejected with 421 "Request validation failed". That protection guards *private/localhost*
+# servers from browser DNS-rebinding attacks; it does not apply to an intentionally-public,
+# unauthenticated, read-only endpoint (Caddy is the sole ingress). Disable it so remote
+# clients can connect; keep it enabled if this ever binds directly to localhost for a
+# private client.
+mcp = FastMCP(
+    "OmicGraph",
+    transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+)
 
 
 @mcp.tool()

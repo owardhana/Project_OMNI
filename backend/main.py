@@ -84,7 +84,10 @@ app.include_router(admin.router)
 # Read-only MCP server (ADR-0017, Pillar 2): remote agents/clients reach the graph at
 # /mcp (behind Caddy). SSE transport; exposes only the bounded typed tools — never
 # run_cypher. YAGNI: no API-key / quota layer yet (arrives with the landing key flow).
-app.mount("/mcp", mcp_server.sse_app())
+# mount_path="/mcp" makes the SSE stream advertise the POST endpoint as /mcp/messages/
+# (matching where the app is mounted); without it clients are told to POST to /messages/
+# and the handshake breaks behind the /mcp Caddy route.
+app.mount("/mcp", mcp_server.sse_app(mount_path="/mcp"))
 
 
 @app.get("/health", tags=["health"])
