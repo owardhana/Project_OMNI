@@ -109,7 +109,9 @@ async def drive_cursor(name: str, agent: ExtractionAgent | None = None) -> dict:
                 logger.info("backfill[%s]: reached %s at %s", name, terminal, state["cursor_date"])
                 break
 
-            start, end = await _fit_window(http, direction, *window)
+            start, end, n_in_window = await _fit_window(http, direction, *window)
+            logger.info("backfill[%s]: window %s..%s (~%d pmids)",
+                        name, cur.iso(start), cur.iso(end), n_in_window)
 
             chunk = new_stats()
             async with get_session() as session:

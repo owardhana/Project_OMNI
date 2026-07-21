@@ -143,6 +143,62 @@ def test_rate_limiter_spaces_calls_and_unlimited_is_instant():
     asyncio.run(run())
 
 
+def test_drive_cursor_runs_loop_body_and_advances(monkeypatch):
+    """Regression: exercise drive_cursor's per-chunk body with ALL I/O mocked — the
+    loop had no coverage and shipped a `_fit_window` 3-tuple unpack-arity crash. Drives
+    one backward chunk, then terminates at the floor."""
+    import asyncio
+    from contextlib import asynccontextmanager
+
+    from backend.extraction import backfill
+    from backend.extraction import cursor as cur
+
+    @asynccontextmanager
+    async def fake_session():
+        yield object()
+
+    state = {"direction": "backward", "status": cur.RUNNING,
+             "cursor_date": "2020-01-15", "floor_date": "2020-01-01", "name": cur.BACKWARD}
+    seen = {"windows": [], "advanced": [], "terminal": []}
+
+    async def fake_get_cursor(session, name):
+        return dict(state)
+
+    async def fake_count(http, mn, mx, term=None):
+        return 50  # under cap → no shrink
+
+    async def fake_advance(session, name, new_date, window, npmids, ncand):
+        seen["advanced"].append(cur.iso(new_date))
+        state["cursor_date"] = "2020-01-01"  # force termination on the next iteration
+
+    async def fake_set_status(session, name, status):
+        seen["terminal"].append(status)
+        state["status"] = status
+
+    monkeypatch.setattr(backfill, "get_session", fake_session)
+    monkeypatch.setattr(backfill, "count_pmids_in_range", fake_count)
+    monkeypatch.setattr(backfill.cur, "get_cursor", fake_get_cursor)
+    monkeypatch.setattr(backfill.cur, "advance_cursor", fake_advance)
+    monkeypatch.setattr(backfill.cur, "set_status", fake_set_status)
+
+    class FakeAgent:
+        async def build_gazetteer(self):
+            return None
+
+        async def process_window(self, session, http, gaz, mn, mx, model, stats):
+            seen["windows"].append((mn, mx))
+            stats["candidate"] += 1
+            return 7
+
+        async def write_run_log_to_graph(self, label, props):
+            pass
+
+    asyncio.run(backfill.drive_cursor(cur.BACKWARD, FakeAgent()))
+    assert seen["windows"], "loop body never ran (process_window not called)"
+    assert seen["advanced"], "cursor never advanced after a completed chunk"
+    assert seen["terminal"] == [cur.DONE], seen["terminal"]  # reached floor
+
+
 def test_fit_window_terminates_at_single_day_when_always_over_cap(monkeypatch):
     """Regression: a window that stays over-cap must bottom out at a single day, not
     re-probe NCBI forever (halving a 2-day span yields no change)."""
