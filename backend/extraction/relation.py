@@ -16,6 +16,7 @@ from dataclasses import dataclass
 
 from backend.config import settings
 from backend.extraction.dictionary import Entry
+from backend.extraction.ratelimit import AsyncRateLimiter
 from backend.llm.client import complete
 from backend.llm.prompts.extraction import (
     EXTRACTION_SYSTEM_PROMPT,
@@ -23,6 +24,10 @@ from backend.llm.prompts.extraction import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Module-level singleton so every concurrent verdict task shares one per-minute budget
+# (the free tier's cap is account-wide, not per-connection). Sized from config.
+_rate_limiter = AsyncRateLimiter(settings.EXTRACTION_LLM_RATE_PER_MIN)
 
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 _POLARITIES = {"affirm", "negate", "hedge"}
@@ -41,6 +46,7 @@ class RelationVerdict:
     evidence_span: str
     pmid: str
     sentence: str
+    model: str  # the model that produced this verdict (recorded on CandidateEvidence)
 
 
 def edge_type_for(kind_a: str, kind_b: str) -> str | None:
@@ -85,22 +91,40 @@ def _parse(raw: str) -> dict | None:
     }
 
 
+def _completion_kwargs() -> dict:
+    """Extra OpenRouter args for the verdict call:
+    - a bounded ``timeout`` so a slow/queued free model can't block a verdict for the
+      SDK's ~10-min default (a timeout raises → counted as an llm_error → chunk retried);
+    - ``reasoning.exclude`` so a reasoning model's chain-of-thought preamble doesn't reach
+      the JSON parser (no-op on non-reasoning models)."""
+    kwargs: dict = {"temperature": 0, "timeout": settings.EXTRACTION_LLM_TIMEOUT_S}
+    if settings.EXTRACTION_EXCLUDE_REASONING:
+        kwargs["extra_body"] = {"reasoning": {"exclude": True}}
+    return kwargs
+
+
 async def extract_relation(
-    sentence: str, a: Entry, b: Entry, pmid: str
+    sentence: str, a: Entry, b: Entry, pmid: str, model: str | None = None
 ) -> RelationVerdict | None:
     """Return a verdict for the pair in this sentence, or None if the pair's kinds
-    are out of the MVP edge vocabulary or the model output was unparseable."""
+    are out of the MVP edge vocabulary or the model output was unparseable.
+
+    ``model`` defaults to ``settings.EXTRACTION_MODEL`` and is recorded on the verdict
+    (→ ``CandidateEvidence.model``) so backfill vs. nightly provenance is truthful even
+    if the two paths ever run different models."""
     edge_type = edge_type_for(a.kind, b.kind)
     if edge_type is None:
         return None
+    model = model or settings.EXTRACTION_MODEL
     subj, obj = _orient(edge_type, a, b)
+    await _rate_limiter.acquire()  # pace to the free-tier per-minute cap (incl. retries)
     raw = await complete(
-        settings.EXTRACTION_MODEL,
+        model,
         [
             {"role": "system", "content": EXTRACTION_SYSTEM_PROMPT},
             {"role": "user", "content": build_extraction_prompt(sentence, subj, obj, edge_type)},
         ],
-        temperature=0,
+        **_completion_kwargs(),
     )
     parsed = _parse(raw)
     if parsed is None:
@@ -111,5 +135,5 @@ async def extract_relation(
         edge_type=edge_type,
         subject_id=subj.node_id, subject_kind=subj.kind,
         object_id=obj.node_id, object_kind=obj.kind,
-        pmid=pmid, sentence=sentence, **parsed,
+        pmid=pmid, sentence=sentence, model=model, **parsed,
     )

@@ -57,7 +57,7 @@ def test_enrich_revert_delta_preserves_overlap_pmids():
 
 
 def _v(edge_type, sid, oid, skind, okind):
-    return RelationVerdict(edge_type, sid, skind, oid, okind, True, "affirm", 0.9, "x", "1", "s")
+    return RelationVerdict(edge_type, sid, skind, oid, okind, True, "affirm", 0.9, "x", "1", "s", "test-model")
 
 
 def test_mint_edge_triple_key_matches_candidate_key():

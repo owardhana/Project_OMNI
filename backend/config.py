@@ -102,13 +102,58 @@ class Settings(BaseSettings):
     # Master switch. OFF by default: the extractor spends on NCBI E-utils + the LLM,
     # so the admin trigger refuses unless this is true. Nothing runs unattended.
     EXTRACTION_AGENT_ENABLED: bool = False
-    # Cheap deterministic model for the per-sentence relation verdict (haiku by default).
-    EXTRACTION_MODEL: str = "anthropic/claude-haiku-4.5"
-    PUBMED_DELTA_TERM: str = "humans[MeSH Terms]"  # broad biomedical delta scope
+    # Model for the per-sentence relation verdict. Default is a FREE OpenRouter slug
+    # (NVIDIA Nemotron 3 Ultra) so the always-on backfill costs $0 — verified present
+    # in the live OpenRouter model list (ADR-0002 slug-verification discipline). A
+    # free/reasoning model trades some yield (weaker JSON adherence, rate limits) for
+    # zero cost; the pipeline fails safe on unparseable output (drops, never corrupts).
+    # Swap to a paid slug (e.g. anthropic/claude-haiku-4.5) for higher-precision runs.
+    EXTRACTION_MODEL: str = "nvidia/nemotron-3-ultra-550b-a55b:free"
+    # Reasoning models emit a chain-of-thought preamble before the JSON verdict; ask
+    # OpenRouter to exclude it so the parser sees clean output. No-op on non-reasoning
+    # models. Turn off only if a chosen model rejects the reasoning param.
+    EXTRACTION_EXCLUDE_REASONING: bool = True
+    PUBMED_DELTA_TERM: str = "humans[MeSH Terms]"  # broad biomedical corpus scope
+    # E-utils date field the cursor windows walk. Default 'edat' (Entrez date = when the
+    # record was ADDED to PubMed): a precise, per-record, monotonic key. NOT 'pdat'
+    # (publication date) — PubMed defaults year-only pub dates to Jan 1, so 'pdat'
+    # single-day counts pile up (~123k on YYYY/01/01 vs ~4k for edat), blowing past the
+    # esearch 9,999 no-history cap and silently truncating the backfill. edat also catches
+    # late-indexed papers a pub-date walk would miss. The actual publication date is still
+    # read from each article's metadata; edat is only the windowing/partition key.
+    EXTRACTION_DATE_TYPE: str = "edat"
     PUBMED_DELTA_DAYS: int = 1        # esearch reldate window (nightly = 1)
     PUBMED_DELTA_RETMAX: int = 200    # max PMIDs per delta run (scaffold cap)
     EXTRACTION_CONFIDENCE_FLOOR: float = 0.5  # candidates below this are not surfaced
     EXTRACTION_EFETCH_BATCH: int = 100  # PMIDs per efetch call
+    # Bounded concurrency for the per-(sentence,pair) LLM verdict calls. Sized so enough
+    # calls are in flight to saturate the per-minute rate limit given the model's latency
+    # (~27s free-tier × 15/min ≈ 7 concurrent), not to burst past it — the rate limiter
+    # below is the real throttle. Serial (=1) is also fine for a tiny nightly delta.
+    EXTRACTION_LLM_CONCURRENCY: int = 8
+    # OpenRouter's FREE tier caps requests account-wide per minute (observed 16/min for
+    # free models). Pace call starts just under that so the backfill drips steadily
+    # instead of 429-storming and burning its budget on retries. Raise for a paid model.
+    EXTRACTION_LLM_RATE_PER_MIN: float = 15.0
+    # Per-verdict LLM timeout. The OpenAI SDK default is ~10 min; a free reasoning model
+    # can stream very slowly or sit queued, so bound it — a hung verdict is dropped (and
+    # counted as an llm_error → chunk retried) rather than blocking a whole chunk. Only
+    # applied to the extraction call, not chat/synthesis.
+    EXTRACTION_LLM_TIMEOUT_S: float = 120.0
+
+    # --- Feature 2 P3 — date-cursor pipeline (nightly catch-up + historical backfill) ---
+    # Both directions walk PubMed by publication date in chunks, persisting progress on a
+    # singleton :ExtractionCursor node so a crash/redeploy resumes at chunk granularity
+    # (stage_verdict's MERGE is idempotent, so redoing a partial chunk is safe).
+    EXTRACTION_BACKFILL_FLOOR_DATE: str = "2005-01-01"  # oldest pubdate the backfill will reach
+    EXTRACTION_BACKFILL_CHUNK_DAYS: int = 7   # backward-walk window width (probe-shrunk if too dense)
+    EXTRACTION_FORWARD_CHUNK_DAYS: int = 1    # nightly forward-walk window width
+    EXTRACTION_FORWARD_LAG_DAYS: int = 2      # trailing buffer for PubMed indexing lag (don't chase "today")
+    EXTRACTION_MAX_PMIDS_PER_CHUNK: int = 5000  # halve the window until a chunk's esearch count fits this
+    # HTTP retry/backoff for NCBI E-utils (honours 429 Retry-After); LLM calls reuse this.
+    EXTRACTION_HTTP_MAX_RETRIES: int = 4
+    EXTRACTION_HTTP_BACKOFF_S: float = 1.0    # base backoff, exponential per attempt
+    EXTRACTION_BACKFILL_CRON_HOUR: int = 3    # nightly forward-catchup cron hour (UTC)
 
     # --- Feature 2 P2 — promotion + provenance-tier discount (ADR-0013) ---
     # Promoted literature edges conduct less signal than canonical ones (a

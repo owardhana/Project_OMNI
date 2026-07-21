@@ -58,7 +58,8 @@ Live in Neo4j Community 5.x (Docker, named volume).
 - **Agentic chatbot (Feature 1):** `ChatAgent` tool-loop over read-only graph tools
   (search / subgraph / shortest-path / read-only Cypher) with SSE streaming + Neo4j
   conversational memory (`:ChatSession`/`:ChatTurn`). Endpoint `/api/chat/stream` (SSE);
-  frontend `ChatPanel`. Verified live (TP53↔EGFR path, LDHA metabolites).
+  frontend `ChatPanel` (now the "Ask" mode of the unified left rail — see Pillar 3
+  below). Verified live (TP53↔EGFR path, LDHA metabolites).
 - **ETL index self-sufficiency:** `run_pipeline.ensure_indexes()` creates MERGE-key
   B-tree indexes before load — a bare rebuild (no backend) was previously index-free and
   hung on quadratic MERGEs.
@@ -108,11 +109,18 @@ Rename OmniGraph → **OmicGraph** + this phase's work, all shipped on
   read-only **MCP server at `/mcp`** (search / semantic / subgraph / shortest-path + bounded
   export; no `run_cypher`).
 - **Pillar 3 — frontend:** tabbed **Entity Inspector** (Overview / Interactions / Annotations
-  / Disease / Regulation / Metabolism / Literature), **landing front-door** (`/#/app`),
-  Fira type.
+  / Disease / Regulation / Metabolism / Literature), **landing front-door** (`/`, links to
+  `#/app`), Fira type.
 - **Follow-ups:** #10 **compartment-aware PPI filter** built (`COMPARTMENT_PPI_FILTER` +
   per-request `?compartment_filter`; ADR-0015). #9 OT→EFO crosswalk **investigated and
   rejected** — the coverage limit is disease-set overlap, not vocabulary (ADR-0016 §Consequences).
+  Dedicated **API docs page** at `#/api` (MCP connect config + REST reference, curl +
+  Python) and an **up-front `#/admin` token gate** (2026-07-14). Left rail **unified**
+  (2026-07-17): `SearchBar` + `EntityBrowser` + `ChatPanel` merged into one dock with a
+  Browse|Ask toggle (both panes stay mounted across mode/collapse switches); edge detail
+  moved from a bottom-left popup into the right dock alongside the node inspector; hover
+  tooltips added for both nodes and edges. Production `/mcp` reachability behind Caddy
+  fixed (2026-07-15 — see [`deploy/Caddyfile`](../deploy/Caddyfile)'s `@mcp` matcher).
 
 Decisions: [ADR-0015](adr/0015-enrichment-as-annotations.md) ·
 [ADR-0016](adr/0016-disgenet-curated-gene-disease.md) ·
@@ -130,11 +138,17 @@ Decisions: [ADR-0015](adr/0015-enrichment-as-annotations.md) ·
   conductance discount + "proposed" edge rendering (P2, auto-promote off/uncalibrated).
   Plan: [`docs/design/feature-2-literature-extraction.md`](design/feature-2-literature-extraction.md);
   trust model: [ADR-0013](adr/0013-literature-extraction-trust-model.md).
-  **Remaining (P3):** calibrate auto-promote (run `RUN_EXTRACTION_EVAL`), historical
-  backfill + tiered models, more edge types (`CATALYSES`/`REGULATES`/`ASSOCIATED_WITH`),
-  Oracle host + cron. **Admin review dashboard BUILT (2026-07-03)** — human-gate
-  promotion surface at `#/admin` ([ADR-0014](adr/0014-literature-review-dashboard.md)):
-  two-pane queue, `ADMIN_TOKEN`-gated, approve/reject/revert with exact-delta revert.
+  **Admin review dashboard BUILT (2026-07-03)** — human-gate promotion surface at
+  `#/admin` ([ADR-0014](adr/0014-literature-review-dashboard.md)): two-pane queue,
+  `ADMIN_TOKEN`-gated, approve/reject/revert with exact-delta revert.
+  **P3 date-cursor pipeline BUILT (2026-07-21, branch `feat/literature-backfill-pipeline`,
+  OFF by default):** interruption-safe **nightly forward catch-up** + always-on
+  **historical backfill to 2005**, both walking a persisted `:ExtractionCursor` (chunk-
+  granular resume, startup auto-resume, pause/resume, graceful 429 backlog handling,
+  bounded-concurrency verdicts). Relation model now defaults to a **free** OpenRouter slug
+  (NVIDIA Nemotron 3 Ultra) so an always-on backfill costs $0 — enable per the runbook.
+  **Remaining (P3):** calibrate auto-promote (run `RUN_EXTRACTION_EVAL`), more edge types
+  (`CATALYSES`/`REGULATES`/`ASSOCIATED_WITH`).
 - **Horizontal metabolite reach-through for pure-TF seeds** — surfacing
   metabolites that belong to a TF's regulated genes. Explicitly rejected as the
   current floor (semantically muddier; ADR-0011 "Rejected alternatives"); the

@@ -23,6 +23,7 @@ from backend.api.routes import (
 )
 from backend.config import settings
 from backend.db.neo4j_client import close_driver, create_indexes
+from backend.extraction import backfill, cursor
 from backend.mcp_server import mcp as mcp_server
 
 CORS_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"]
@@ -57,6 +58,25 @@ async def lifespan(app: FastAPI):
             id="embedding_nightly",
             replace_existing=True,
         )
+    # Feature 2 P3 — literature pipeline (gated on the extractor master switch). The
+    # nightly forward catch-up walks a persisted date cursor (interruption-safe: a
+    # crashed night resumes the next), replacing the old stateless reldate delta. Both
+    # this and any RUNNING historical backfill are relaunched on startup so a redeploy
+    # mid-run self-heals instead of silently stopping.
+    if settings.EXTRACTION_AGENT_ENABLED:
+        async def _nightly_forward():
+            await backfill.arm_forward_cursor()
+            backfill.launch_drive(cursor.FORWARD)
+
+        scheduler.add_job(
+            _nightly_forward,
+            CronTrigger(hour=settings.EXTRACTION_BACKFILL_CRON_HOUR),
+            id="extraction_forward_nightly",
+            replace_existing=True,
+        )
+        resumed = await backfill.resume_running_cursors()
+        if resumed:
+            logging.getLogger(__name__).info("resumed extraction cursors: %s", resumed)
     scheduler.start()
     yield
     scheduler.shutdown(wait=False)

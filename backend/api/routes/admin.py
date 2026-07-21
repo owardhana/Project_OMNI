@@ -11,7 +11,7 @@ from backend.agents.extraction_agent import extraction_agent
 from backend.agents.validation_agent import validation_agent
 from backend.config import settings
 from backend.db.neo4j_client import get_session
-from backend.extraction import review
+from backend.extraction import backfill, cursor, review
 
 logger = logging.getLogger(__name__)
 
@@ -140,6 +140,53 @@ async def extraction_candidates(limit: int = 50):
 async def extraction_agent_log():
     """Return the last 10 ExtractionRun log entries."""
     return await extraction_agent.recent_runs(limit=10)
+
+
+@router.post("/agents/extraction/backfill/start")
+async def start_backfill():
+    """Arm both cursors (anchored at today−lag) and launch the always-on backward
+    historical backfill. Gated on EXTRACTION_AGENT_ENABLED (spends NCBI; LLM is the free
+    model by default). Idempotent: a second start won't spawn a duplicate loop."""
+    if not settings.EXTRACTION_AGENT_ENABLED:
+        return {"status": "disabled",
+                "detail": "set EXTRACTION_AGENT_ENABLED=true to run the backfill"}
+    meta = await backfill.start_backfill()
+    launched = backfill.launch_drive(cursor.BACKWARD)
+    return {"status": "started" if launched else "already_running", **meta}
+
+
+@router.post("/agents/extraction/backfill/pause")
+async def pause_backfill():
+    """Pause the historical backfill. The loop stops at the next chunk boundary and the
+    cursor keeps its place; resume continues from exactly there."""
+    async with get_session() as session:
+        state = await cursor.set_status(session, cursor.BACKWARD, cursor.PAUSED)
+    return {"status": "paused", "cursor": state}
+
+
+@router.post("/agents/extraction/backfill/resume")
+async def resume_backfill():
+    """Resume a paused historical backfill (re-arm status + relaunch the loop)."""
+    if not settings.EXTRACTION_AGENT_ENABLED:
+        return {"status": "disabled",
+                "detail": "set EXTRACTION_AGENT_ENABLED=true to run the backfill"}
+    async with get_session() as session:
+        await cursor.set_status(session, cursor.BACKWARD, cursor.RUNNING)
+    launched = backfill.launch_drive(cursor.BACKWARD)
+    return {"status": "resumed" if launched else "already_running"}
+
+
+@router.get("/agents/extraction/backfill/status")
+async def backfill_status():
+    """Both cursors' live state: dates, status, and cumulative counters."""
+    async with get_session() as session:
+        forward = await cursor.get_cursor(session, cursor.FORWARD)
+        backward = await cursor.get_cursor(session, cursor.BACKWARD)
+    return {
+        "forward": forward,
+        "backward": backward,
+        "drives_active": backfill.active_drives(),
+    }
 
 
 # --- ValidationAgent: promotion gate (Feature 2 P2, ADR-0013) ---------------

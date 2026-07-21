@@ -19,7 +19,6 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from backend.config import settings
 from backend.extraction.relation import RelationVerdict
 
 logger = logging.getLogger(__name__)
@@ -151,7 +150,7 @@ async def stage_verdict(session, v: RelationVerdict, provenance: dict) -> dict:
         "oid": v.object_id, "okind": v.object_kind,
         "pmid": v.pmid, "polarity": v.polarity,
         "confidence": v.confidence, "evidence_span": v.evidence_span,
-        "model": settings.EXTRACTION_MODEL,
+        "model": v.model,  # actual model that produced this verdict (may differ per path)
         "now": _now(),
         "source_agent": provenance.get("source_agent"),
         "agent_version": provenance.get("agent_version"),

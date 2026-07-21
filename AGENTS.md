@@ -13,8 +13,9 @@ MVP agents (built)
 ├── EmbeddingAgent   — semantic-search embeddings (cron opt-in, default off; run on demand)
 ├── ChatAgent        — agentic tool-loop over the graph, streaming, per-request
 │                      (the query surface; replaced the single-shot Text2Cypher endpoint)
-└── ExtractionAgent  — literature -> CandidateEdge proposals (Feature 2 P1 scaffold;
-                       OFF by default, admin-gated; staging only, promotion is P2)
+└── ExtractionAgent  — literature -> CandidateEdge proposals (Feature 2; OFF by default,
+                       admin-gated; nightly forward cron + always-on historical backfill
+                       via date cursors; staging only, promotion is P2)
 
 v2 agents (post-demo)
 ├── ValidationAgent  — promotion gate: scores + promotes CandidateEdges (Feature 2 P2)
@@ -118,19 +119,34 @@ ephemeral (re-run on demand), never persisted. Operational nodes, never biologic
 staging nodes — the first agent to propose topology. Closed-world (links only to
 existing graph nodes), abstracts only, MVP edge types `INTERACTS_WITH` + `IMPLICATED_IN`.
 
-**Trigger:** Manual, **gated** — `POST /admin/agents/extraction/run` returns
-`disabled` unless `EXTRACTION_AGENT_ENABLED=true` (spends NCBI + LLM). No cron.
+**Trigger:** three gated entry points (all refuse unless `EXTRACTION_AGENT_ENABLED=true`;
+LLM defaults to a **free** OpenRouter slug so only NCBI is metered):
+- `POST /admin/agents/extraction/run` — one-shot `reldate` delta (manual).
+- **Nightly forward catch-up cron** (`EXTRACTION_BACKFILL_CRON_HOUR`) — walks a persisted
+  date cursor forward to the frontier (`today − lag`), replacing the stateless delta so a
+  crashed night resumes the next.
+- `POST /admin/agents/extraction/backfill/start` — the always-on **historical backfill**,
+  walking a second cursor backward to `EXTRACTION_BACKFILL_FLOOR_DATE` (2005). Pausable
+  (`/pause`, `/resume`), resumes on restart; `/backfill/status` reports both cursors.
 
-**Flow:** build gazetteer from graph → PubMed reldate delta (E-utils) → per sentence
-with ≥2 distinct linked entities → cheap LLM verdict per in-vocab pair (polarity:
-affirm/negate/hedge) → `stage_verdict`: enrich existing trusted edge, else upsert a
-`CandidateEdge` (+`CandidateEvidence` per PMID; confidence = independent-PMID agreement).
+**Flow:** build gazetteer once → PubMed publication-date window (E-utils, paginated) → per
+sentence with ≥2 distinct linked entities → cheap LLM verdict per in-vocab pair (polarity:
+affirm/negate/hedge), verdicts run **bounded-concurrently** then stage **serially** →
+`stage_verdict`: enrich existing trusted edge, else upsert a `CandidateEdge`
+(+`CandidateEvidence` per PMID, tagged with the actual `model`; confidence =
+independent-PMID agreement).
+
+**Interruption safety:** progress is a persisted date on a singleton `:ExtractionCursor`
+(one per direction), advanced only after a whole chunk completes — a crash mid-chunk just
+redoes it (idempotent MERGE). A sustained-throttle chunk is **retried, not skipped**
+(cursor not advanced) so no data is lost; after `EXTRACTION_HTTP_MAX_RETRIES` stalls it
+advances with a loud log so one bad window can't wedge the pipeline.
 
 **Constraints (ADR-0013):** NEVER writes trusted topology. Candidates are operational
 labels with endpoint ids as **string properties** (not relationships) → invisible to
 traversal/search/counts. Promoted edges (P2) will carry `provenance_tier='literature'`.
 
-**Files:** `backend/agents/extraction_agent.py`, `backend/extraction/{dictionary,ingest,relation,stage}.py`,
+**Files:** `backend/agents/extraction_agent.py`, `backend/extraction/{dictionary,ingest,relation,stage,cursor,backfill}.py`,
 `backend/llm/prompts/extraction.py`. Design: `docs/design/feature-2-literature-extraction.md`.
 
 ---
@@ -203,9 +219,10 @@ Agents do not call each other directly. Coordination via Neo4j graph nodes:
 CitationAgent    reads  → (:Edge {pmids: []})
 CitationAgent    writes → (:Edge {pmids: [...], citation_attempted: true})
 
-LiteratureAgent  writes → (:EdgeCandidate {status: "pending_review"})
-ValidationAgent  reads  → (:EdgeCandidate {status: "pending_review"})
-ValidationAgent  writes → (:Edge) or (:EdgeCandidate {status: "rejected"})
+ExtractionAgent  writes → (:CandidateEdge {status: "pending"})
+ValidationAgent  reads  → (:CandidateEdge {status: "pending"})
+ValidationAgent  writes → a real typed edge (provenance_tier='literature') or
+                           (:CandidateEdge {status: "rejected"})
 
 FreshnessAgent   writes → (:FreshnessAlert)
 ETL scripts      reads  → (:FreshnessAlert) [manual trigger]
@@ -232,10 +249,19 @@ Graph = shared state / message bus. No inter-agent HTTP calls.
 POST /admin/agents/citation/run           → trigger CitationAgent manually
 POST /admin/agents/embedding/run          → trigger EmbeddingAgent manually (one batch)
 GET  /admin/agents/{citation,embedding}/log → last N run-log nodes
-POST /admin/agents/extraction/run         → trigger ExtractionAgent (gated: EXTRACTION_AGENT_ENABLED)
+POST /admin/agents/extraction/run         → trigger ExtractionAgent delta (gated: EXTRACTION_AGENT_ENABLED)
 GET  /admin/agents/extraction/candidates  → pending CandidateEdges ≥ confidence floor
 GET  /admin/agents/extraction/log         → last N ExtractionRun nodes
-POST /admin/candidates/{id}/approve       → promote CandidateEdge (ValidationAgent, P2)
-POST /admin/candidates/{id}/reject        → reject CandidateEdge (P2)
+POST /admin/agents/extraction/backfill/start   → arm cursors + launch historical backfill (gated)
+POST /admin/agents/extraction/backfill/pause   → pause the backfill at the next chunk boundary
+POST /admin/agents/extraction/backfill/resume  → resume a paused backfill (gated)
+GET  /admin/agents/extraction/backfill/status  → both cursors' dates/status/counters
+POST /admin/agents/validation/run         → auto-promote pass (gated: VALIDATION_AUTO_PROMOTE_ENABLED, off by default)
+GET  /admin/agents/validation/log         → last N ValidationRun nodes
+GET  /admin/candidates?status=            → review-dashboard queue (P3) — NOT confidence-floor-gated, unlike above
+GET  /admin/candidates/{triple_key}       → candidate detail: resolved endpoint names, evidence chain, would_be_action preview (P3)
+POST /admin/candidates/{triple_key}/approve → promote CandidateEdge (ValidationAgent, P2)
+POST /admin/candidates/{triple_key}/reject  → reject CandidateEdge (P2)
+POST /admin/candidates/{triple_key}/revert  → undo a promotion, exact-delta (P3, ADR-0014)
 GET  /admin/freshness                     → FreshnessAlert nodes (v2)
 ```

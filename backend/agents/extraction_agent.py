@@ -1,26 +1,37 @@
-"""ExtractionAgent — literature -> CandidateEdge proposals (Feature 2, P1).
+"""ExtractionAgent — literature -> CandidateEdge proposals (Feature 2).
 
-Orchestrates the closed-world pipeline: build the gazetteer from the graph, pull a
-PubMed reldate delta, and for every sentence with >=2 distinct linked entities, ask a
+Orchestrates the closed-world pipeline: build the gazetteer from the graph, pull a set
+of PubMed abstracts, and for every sentence with >=2 distinct linked entities, ask a
 cheap model whether an in-vocab relation is asserted, then STAGE it as a CandidateEdge
 (never trusted topology — ADR-0013).
 
-First agent to propose topology, so it is firewalled: candidates live in operational
-labels, tagged provenance_tier='literature', promotion is a separate (P2) gate. The
-run is manual/opt-in — the admin trigger is gated on EXTRACTION_AGENT_ENABLED (default
-off) so it never spends on NCBI/LLM unattended.
+Three entry points share one processing core (``_process_pmids``):
+  - ``run``           — one-shot delta (``reldate``), the manual admin trigger.
+  - ``process_window``— one publication-date window, used by the cursor pipeline
+    (``extraction/backfill.py``) for the nightly forward catch-up + historical backfill.
+
+Cost/throughput: the per-(sentence,pair) verdict is the only LLM call and the only slow
+step, so verdicts within an efetch batch run under a bounded ``asyncio.Semaphore`` and
+are then STAGED SERIALLY — the write is milliseconds against seconds of inference, so we
+keep the throughput while avoiding intra-run MERGE contention on the same CandidateEdge.
+
+Firewalled (ADR-0013): candidates live in operational labels, tagged
+provenance_tier='literature'; promotion is a separate (P2) gate. Every entry point is
+gated on EXTRACTION_AGENT_ENABLED upstream so it never spends unattended.
 """
 
 import asyncio
 import logging
 
 import httpx
+from neo4j.exceptions import TransientError
 
 from backend.agents.base_agent import BaseAgent
 from backend.db.neo4j_client import get_session
 from backend.extraction.dictionary import Entry, build_gazetteer_from_graph
 from backend.extraction.ingest import (
     fetch_articles,
+    fetch_pmids_in_range,
     fetch_recent_pmids,
     request_delay,
     split_sentences,
@@ -64,9 +75,110 @@ def _candidate_pairs(entities: list[Entry]) -> list[tuple[Entry, Entry]]:
     return pairs
 
 
+def new_stats() -> dict:
+    """Fresh counter bucket. Keys 'candidate'/'enriched'/'skipped' match
+    ``stage_verdict``'s returned status so ``stats[status] += 1`` lands correctly."""
+    return {
+        "pmids_fetched": 0, "articles": 0, "sentences_scanned": 0,
+        "pairs_evaluated": 0, "candidate": 0, "enriched": 0, "skipped": 0,
+        "llm_errors": 0,
+    }
+
+
 class ExtractionAgent(BaseAgent):
     agent_name = "ExtractionAgent"
-    agent_version = "0.1.0"
+    agent_version = "0.2.0"
+
+    async def build_gazetteer(self):
+        """Build the surface→entity automaton from the graph. Expensive (~111k
+        surfaces), so the cursor loop builds it ONCE and reuses it across chunks (it
+        only changes as the graph changes)."""
+        async with get_session() as session:
+            gazetteer = await build_gazetteer_from_graph(session)
+        logger.info("ExtractionAgent: gazetteer surfaces=%d", len(gazetteer))
+        return gazetteer
+
+    async def _verdict(self, sem: asyncio.Semaphore, sentence, a, b, pmid, model, stats):
+        """One semaphore-gated verdict. Returns a RelationVerdict, or None if the model
+        output was unparseable (dropped — recall cost only) or the call kept failing
+        after retries (transient throttle — counted so the loop can decide to retry the
+        whole chunk rather than silently lose it)."""
+        async with sem:
+            try:
+                # extract_relation returns None on UNPARSEABLE output (a drop, never
+                # retried); an exception means transient failure (rate limit / network).
+                # Hard-bound the whole retry budget with wait_for: the SDK per-call
+                # timeout proved unreliable against a slow-streaming free model, and a
+                # stuck verdict must never block a chunk ("always running" requirement).
+                budget = settings.EXTRACTION_LLM_TIMEOUT_S * (settings.EXTRACTION_HTTP_MAX_RETRIES + 1) + 5
+                return await asyncio.wait_for(
+                    self.retry(
+                        extract_relation, sentence, a, b, pmid, model,
+                        n=settings.EXTRACTION_HTTP_MAX_RETRIES,
+                    ),
+                    timeout=budget,
+                )
+            except Exception as exc:  # noqa: BLE001  (incl. asyncio.TimeoutError)
+                stats["llm_errors"] += 1
+                logger.warning("extraction: verdict failed/timeout pmid=%s: %s", pmid, exc)
+                return None
+
+    async def _stage(self, session, verdict, provenance) -> dict:
+        """Stage one verdict, retrying only on Neo4j TransientError (a deadlock from the
+        forward + backward cursors racing a MERGE / pmids-append on the same edge). The
+        uniqueness constraint on CandidateEdge.triple_key prevents duplicate nodes; this
+        handles the lock contention that constraint introduces."""
+        attempts = settings.EXTRACTION_HTTP_MAX_RETRIES
+        for attempt in range(attempts + 1):
+            try:
+                return await stage_verdict(session, verdict, provenance)
+            except TransientError as exc:
+                if attempt >= attempts:
+                    raise
+                await asyncio.sleep(settings.EXTRACTION_HTTP_BACKOFF_S * (2 ** attempt))
+                logger.warning("extraction: staging deadlock, retry %d: %s", attempt + 1, exc)
+
+    async def _process_pmids(self, session, http, gazetteer, pmids, model, stats) -> None:
+        """Core loop: efetch abstracts in batches; within each batch run all verdicts
+        concurrently (bounded), then stage the non-None ones serially."""
+        provenance = self.provenance()
+        delay = request_delay()
+        sem = asyncio.Semaphore(max(1, settings.EXTRACTION_LLM_CONCURRENCY))
+        batch = settings.EXTRACTION_EFETCH_BATCH
+        for i in range(0, len(pmids), batch):
+            articles = await fetch_articles(http, pmids[i : i + batch])
+            await asyncio.sleep(delay)
+
+            tasks = []
+            for pmid, art in articles.items():
+                stats["articles"] += 1
+                text = f"{art['title']}. {art['abstract']}"
+                for sentence in split_sentences(text):
+                    stats["sentences_scanned"] += 1
+                    entities = _resolve_entities(gazetteer.match(sentence))
+                    if len(entities) < 2:
+                        continue  # co-mention gate: need >=2 distinct entities
+                    for a, b in _candidate_pairs(entities):
+                        stats["pairs_evaluated"] += 1
+                        tasks.append(self._verdict(sem, sentence, a, b, pmid, model, stats))
+
+            verdicts = await asyncio.gather(*tasks)
+            for verdict in verdicts:
+                if verdict is None:
+                    continue
+                res = await self._stage(session, verdict, provenance)
+                status = res.get("status", "skipped")
+                stats[status] = stats.get(status, 0) + 1
+
+    async def process_window(
+        self, session, http, gazetteer, mindate: str, maxdate: str, model: str, stats: dict
+    ) -> int:
+        """Fetch + process one publication-date window (cursor pipeline). Returns the
+        number of PMIDs in the window."""
+        pmids = await fetch_pmids_in_range(http, mindate, maxdate, delay=request_delay())
+        stats["pmids_fetched"] += len(pmids)
+        await self._process_pmids(session, http, gazetteer, pmids, model, stats)
+        return len(pmids)
 
     async def run(
         self,
@@ -74,44 +186,17 @@ class ExtractionAgent(BaseAgent):
         days: int | None = None,
         retmax: int | None = None,
     ) -> dict:
-        async with get_session() as session:
-            gazetteer = await build_gazetteer_from_graph(session)
-        logger.info("ExtractionAgent: gazetteer surfaces=%d", len(gazetteer))
-
-        # Keys 'candidate'/'enriched'/'skipped' match stage_verdict's returned status
-        # exactly, so `stats[status] += 1` lands in the right bucket.
-        stats = {
-            "pmids_fetched": 0, "articles": 0, "sentences_scanned": 0,
-            "pairs_evaluated": 0, "candidate": 0, "enriched": 0, "skipped": 0,
-        }
-        delay = request_delay()
-
+        """One-shot delta over a ``reldate`` window — the manual admin trigger. The
+        cursor pipeline (forward/backward) is the always-on path; see backfill.py."""
+        gazetteer = await self.build_gazetteer()
+        stats = new_stats()
         async with httpx.AsyncClient(timeout=30.0) as http, get_session() as session:
             pmids = await fetch_recent_pmids(http, term, days, retmax)
             stats["pmids_fetched"] = len(pmids)
-            await asyncio.sleep(delay)
-
-            batch = settings.EXTRACTION_EFETCH_BATCH
-            for i in range(0, len(pmids), batch):
-                articles = await fetch_articles(http, pmids[i : i + batch])
-                await asyncio.sleep(delay)
-                for pmid, art in articles.items():
-                    stats["articles"] += 1
-                    text = f"{art['title']}. {art['abstract']}"
-                    for sentence in split_sentences(text):
-                        stats["sentences_scanned"] += 1
-                        entities = _resolve_entities(gazetteer.match(sentence))
-                        if len(entities) < 2:
-                            continue  # co-mention gate: need >=2 distinct entities
-                        for a, b in _candidate_pairs(entities):
-                            stats["pairs_evaluated"] += 1
-                            verdict = await extract_relation(sentence, a, b, pmid)
-                            if verdict is None:
-                                continue
-                            res = await stage_verdict(session, verdict, self.provenance())
-                            status = res.get("status", "skipped")
-                            stats[status] = stats.get(status, 0) + 1
-
+            await asyncio.sleep(request_delay())
+            await self._process_pmids(
+                session, http, gazetteer, pmids, settings.EXTRACTION_MODEL, stats
+            )
         await self.write_run_log_to_graph("ExtractionRun", stats)
         logger.info("ExtractionAgent: %s", stats)
         return stats

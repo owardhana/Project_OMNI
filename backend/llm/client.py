@@ -41,10 +41,19 @@ async def embed_text(text: str) -> list[float]:
 
 
 async def complete(model: str, messages: list[dict], **kwargs) -> str:
-    """Run a chat completion and return the assistant text (never None)."""
+    """Run a chat completion and return the assistant text (never None).
+
+    OpenRouter can return an HTTP 200 whose body carries ``choices: null`` plus an
+    ``error`` (e.g. an upstream free-tier rate limit) instead of raising. Guard against
+    that so it surfaces as a retryable exception rather than a bare
+    ``'NoneType' object is not subscriptable`` — callers treat exceptions as transient
+    (retry/backoff) and unparseable *text* as a drop, so this must raise, not return ""."""
     response = await get_client().chat.completions.create(
         model=model, messages=messages, **kwargs
     )
+    if not response.choices:
+        err = getattr(response, "error", None)
+        raise RuntimeError(f"completion returned no choices (model={model}): {err or response}")
     return response.choices[0].message.content or ""
 
 

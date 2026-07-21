@@ -147,12 +147,19 @@ topology leak — see firewall invariant in ADR-0013).
   candidates (acceptable, same as existing operational nodes). But **UI node/edge
   counts must exclude operational labels** or `622,813` silently inflates. See ADR-0013.
 
-## Cost / compute (backfill only)
+## Cost / compute
 
-Nightly is near-free (E-utils + local filter + a few hundred cheap LLM calls). The
-expensive tier is **backfill** (millions of papers) — deferred to P3, where the
-cheap-screen→strong-confirm two-tier and a possible quantized local model on the host
-CPU (llama.cpp, ARM) actually matter. See [cloud-migration.md](cloud-migration.md).
+Nightly is near-free (E-utils + local filter + a few hundred LLM calls). The **backfill**
+(millions of papers) was the "expensive tier" — now solved by inference cost, not scale
+tricks: `EXTRACTION_MODEL` defaults to a **free** OpenRouter slug, so both nightly and
+backfill are $0 on the LLM side (only NCBI is metered, and it's free). The originally-planned
+cheap-screen→strong-confirm two-tier and a quantized local CPU model (llama.cpp, ARM) are
+kept as **fallbacks** if the free tier's yield/latency disappoint. Measured on the default
+free model (Nemotron 3 Ultra, `reasoning.exclude`): clean constrained-JSON verdicts, but
+**latency is high and variable** (tens of seconds/call, occasional long queueing) — hence
+the bounded per-verdict timeout, backoff/retry, and the "always running, throttling costs
+time not data" operating model. If backfill *speed* matters more than $0, point
+`EXTRACTION_MODEL` at a paid slug. See [cloud-migration.md](cloud-migration.md).
 
 ## Phasing
 
@@ -168,13 +175,18 @@ CPU (llama.cpp, ARM) actually matter. See [cloud-migration.md](cloud-migration.m
    `LITERATURE_CONDUCTANCE_FACTOR` discount in `_conductance`; frontend "proposed"
    rendering (pale-yellow faint/thin edge + EdgeDetailPanel badge + legend). Auto-promote
    default-OFF until the precision number exists.
-3. **P3 — backfill + more edge types + host. ⏳ REMAINING.**
+3. **P3 — backfill + more edge types + host. 🟡 PARTIALLY BUILT.**
    - **Calibrate auto-promote first:** run `RUN_EXTRACTION_EVAL` on an expanded labelled
      set (30–50, disease-linking-heavy), set `VALIDATION_AUTO_PROMOTE_CONFIDENCE` from
-     measured precision, then consider enabling `VALIDATION_AUTO_PROMOTE_ENABLED`.
-   - **Backfill:** throttled historical pull (millions of papers). This is the expensive
-     tier — add the cheap-screen→strong-confirm two-tier + possibly a quantized local
-     model on the host CPU (llama.cpp, ARM). Nightly stays near-free.
+     measured precision, then consider enabling `VALIDATION_AUTO_PROMOTE_ENABLED`. ⏳
+   - **Date-cursor pipeline — ✅ BUILT (see "Historical backfill & nightly cursor" below).**
+     The throttled historical pull (2005→now) + an interruption-safe nightly forward
+     catch-up, both walking a persisted `:ExtractionCursor`. The expensive-tier cost is
+     solved differently than first sketched: instead of a cheap-screen→strong-confirm
+     two-tier, the relation model defaults to a **free** OpenRouter slug (NVIDIA Nemotron
+     3 Ultra), so the always-on backfill is $0 and "just leave it running" is viable. The
+     two-tier + quantized-local-model option is retained as a fallback if the free tier's
+     yield/latency proves inadequate.
    - **More edge types (scope: 5 of 9, not all).** The extractor targets edges that are
      *claims a paper asserts*, never facts we already compute authoritatively. MVP does 2
      (`INTERACTS_WITH`, `IMPLICATED_IN`); the fast-follows are `CATALYSES`
@@ -190,8 +202,10 @@ CPU (llama.cpp, ARM) actually matter. See [cloud-migration.md](cloud-migration.m
      (gene→transcript, annotation), `DIFFERENTIALLY_EXPRESSED` (gene→tumour, TCGA
      quantitative log2FC + cohort — a paper's "upregulated in X" is a weaker qualitative
      restatement of what we already have). This is a scope decision, not a backlog gap.
-   - **Host + cron:** move the nightly run onto the Oracle box with a real scheduler
-     (currently manual/local). See [cloud-migration.md](cloud-migration.md).
+   - **Host + cron — ✅ BUILT.** The nightly forward catch-up is an APScheduler cron in the
+     FastAPI backend (`EXTRACTION_BACKFILL_CRON_HOUR`), gated on `EXTRACTION_AGENT_ENABLED`
+     — no extra scheduler service (consistent with the citation/embedding crons). Enable it
+     on the Oracle box per the runbook. See [cloud-migration.md](cloud-migration.md).
    - **Admin review dashboard — ✅ BUILT (2026-07-03).** The human-in-the-loop promotion
      surface (auto-promote is uncalibrated + OFF, so manual review is the only safe
      promotion path). Two-pane queue at `#/admin`, `ADMIN_TOKEN`-gated; approve/reject/
@@ -200,6 +214,77 @@ CPU (llama.cpp, ARM) actually matter. See [cloud-migration.md](cloud-migration.m
      [ADR-0014](../adr/0014-literature-review-dashboard.md).
    - **Expand the disease-generic gate** to be data-driven (single-token `Disease.name`
      audit) rather than the hardcoded `GENERIC_TERMS` floor.
+
+## Historical backfill & nightly cursor (P3)
+
+**BUILT.** Turns the one-shot `reldate` delta into two always-on, interruption-safe walks
+over PubMed publication dates. Free-model inference (default `EXTRACTION_MODEL =
+nvidia/nemotron-3-ultra-550b-a55b:free`) makes "just leave it running" the operating model.
+
+Windows walk PubMed by **entry date** (`EXTRACTION_DATE_TYPE=edat`, the date a record was
+added), not publication date. `pdat` defaults year-only pub dates to Jan 1, so a single
+`YYYY/01/01` returns ~123k records (measured) — over both the chunk cap and the esearch
+9,999 no-history cap, silently truncating the backfill for exactly the older literature it
+targets. `edat` is a clean per-record partition (~4k on the same day) and also catches
+late-indexed papers. The real publication date is still read from each article's metadata.
+
+**State = one singleton node per direction**, not one node per scanned paper (a
+`:ScannedArticle`-per-PMID scheme would mint tens of millions of bookkeeping nodes over
+2005→now — the same Community-edition volume wall that gates ENCODE). Progress is a date:
+
+```
+(:ExtractionCursor {name, direction, cursor_date, floor_date?, status,
+                    chunks_done, pmids_processed, candidates_staged, last_window, ...})
+```
+
+- **`forward-catchup`** walks `[A+1 .. today−lag]` upward — the nightly cron. Its frontier
+  trails `today` by `EXTRACTION_FORWARD_LAG_DAYS` so PubMed's indexing lag can't strand
+  recently-indexed papers (the failure the old `reldate` delta had: a crashed night's PMIDs
+  fell permanently out of the next night's relative window).
+- **`backward-historical`** walks `[floor .. A]` downward to `EXTRACTION_BACKFILL_FLOOR_DATE`
+  (default `2005-01-01`) — the always-on backfill. Pausable; resumes on restart.
+- Anchored together at `A = today − lag` on `start`, so the two coverage regions meet with
+  no seam and no overlap. The date-window arithmetic is pure and unit-tested
+  (`test_backfill_cursor.py`: every day in range covered exactly once, no gaps).
+
+**Resumability is at chunk granularity.** The loop advances the cursor **only after a whole
+window completes**, so a crash (or the common one — a `git pull && up --build` redeploy)
+mid-chunk just redoes that window on restart. Redo is safe because `stage_verdict` MERGEs
+are idempotent. On startup, any cursor persisted as `RUNNING` is relaunched; `PAUSED`/`DONE`
+are left alone so operator intent survives a restart.
+
+**Throughput.** Windows are `esearch`-probed and halved until under
+`EXTRACTION_MAX_PMIDS_PER_CHUNK` (so a dense week can't blow up one chunk); the retstart page
+loop then fetches the window (no history-server/WebEnv needed under the 9,999 cap). Within an
+efetch batch, the per-(sentence,pair) verdicts run under an
+`asyncio.Semaphore(EXTRACTION_LLM_CONCURRENCY)` and are then **staged serially** — the LLM
+call is seconds, the Neo4j write milliseconds, so this keeps the throughput while avoiding
+MERGE contention on the same `CandidateEdge`.
+
+**Graceful backlog / rate-limiting** (the free tier throttles, and that's accepted): NCBI +
+LLM calls retry with exponential backoff honouring `429 Retry-After`. If a chunk still shows
+LLM errors, the cursor is **not advanced** — the loop backs off and retries the *same*
+window, so throttling costs time, never data. Only after `EXTRACTION_HTTP_MAX_RETRIES`
+consecutive stalls does it advance with a loud log, so one pathological window can't wedge
+the pipeline. A verdict whose output is merely *unparseable* is dropped (recall cost only) —
+distinct from a *failed* call (retried); this split is what keeps a worse/free model safe.
+
+**Concurrency safety.** Forward + backward cursors run at once, so `MERGE (ce:CandidateEdge
+{triple_key})` can now race. `create_indexes()` declares a **uniqueness constraint** on
+`CandidateEdge.triple_key` (+ `CandidateEvidence(triple_key,pmid)`), without which concurrent
+MERGE would create duplicate nodes and corrupt the `n_affirm`/confidence recompute; staging
+also retries on Neo4j `TransientError` (lock deadlock). Launches are deduped in-process so
+start/resume/cron/startup can't spawn a second loop for one cursor.
+
+**Provenance.** `CandidateEvidence.model` records the *actual* model per verdict (threaded
+through `RelationVerdict`), so backfill (free Nemotron) vs. a paid nightly run stay
+distinguishable in the review dashboard without a separate flag.
+
+**Files:** `backend/extraction/{cursor,backfill}.py`, `ingest.count_pmids_in_range` /
+`fetch_pmids_in_range`, `ExtractionAgent.process_window`, admin
+`/agents/extraction/backfill/{start,pause,resume,status}`, `main.py` cron + startup resume.
+**Operate it** via the runbook (`docs/deploy/oracle-runbook.md` → "Enable the literature
+backfill").
 
 ## Admin Review Dashboard (P3)
 

@@ -251,6 +251,34 @@ the Caddyfile with [`basic_auth`](https://caddyserver.com/docs/caddyfile/directi
 the backend logs a startup warning if you do. To try it with throwaway data, run
 `scripts/seed_demo_candidates.py` (see the design doc); `--clear` removes it.
 
+### Enable the literature backfill + nightly cursor (Feature 2 P3)
+
+Same master gate (`EXTRACTION_AGENT_ENABLED=true`). With it on, the backend already runs
+the **nightly forward catch-up** cron (walks a persisted date cursor forward — no manual
+step). The relation model defaults to a **free** OpenRouter slug, so the LLM side of an
+always-on run costs $0; only NCBI E-utils is metered (free, rate-limited). This box is
+production — enable it here, not locally.
+
+```bash
+# one-time: kick off the always-on historical backfill (2005 -> now, walks backward)
+curl -X POST -H "X-Admin-Token: $ADMIN_TOKEN" https://<your-site>/admin/agents/extraction/backfill/start
+
+# watch both cursors (dates, status, cumulative candidates)
+curl -H "X-Admin-Token: $ADMIN_TOKEN" https://<your-site>/admin/agents/extraction/backfill/status
+
+# pause / resume any time (resumes from the exact cursor date)
+curl -X POST -H "X-Admin-Token: $ADMIN_TOKEN" https://<your-site>/admin/agents/extraction/backfill/pause
+curl -X POST -H "X-Admin-Token: $ADMIN_TOKEN" https://<your-site>/admin/agents/extraction/backfill/resume
+```
+
+It is **interruption-safe by design**: progress is a date on an `:ExtractionCursor` node,
+advanced only after each chunk finishes, so a `git pull && DC up -d --build` redeploy
+mid-run resumes automatically (startup relaunches any `RUNNING` cursor). Sustained NCBI/LLM
+throttling is handled gracefully — the loop backs off and retries the same window rather
+than skipping papers. Tunables (`EXTRACTION_BACKFILL_FLOOR_DATE`, `_CHUNK_DAYS`,
+`_LLM_CONCURRENCY`, `_MAX_PMIDS_PER_CHUNK`, `EXTRACTION_BACKFILL_CRON_HOUR`) live in
+`deploy/.env.prod`; see `.env.example`. Candidates land in the same `#/admin` review queue.
+
 ### Update the deployment: **graph** changes (rarer — and it CLOBBERS)
 
 ⚠️ The cloud graph is ahead of your laptop's — the crawls run **on the cloud**, so it
@@ -313,4 +341,5 @@ $0 within Always-Free limits and is exempt from idle reclamation).
 | "Out of host capacity" on create | Retry / different AD / different region (Phase 2 note). |
 | Backend unhealthy, Neo4j OOM | Lower `NEO4J_HEAP`/`NEO4J_PAGECACHE` in `deploy/.env.prod` (try 2G/3G) and re-up. 12 GB is tight. |
 | Chat streams all at once | Confirm you're hitting it through Caddy (`/api/chat/stream`), which sets `flush_interval -1`. |
+| MCP client (or the `#/api` connect config) gets an HTML page instead of an SSE handshake at `/mcp` | An older `deploy/Caddyfile` without the `@mcp` named matcher lets `/mcp/*` fall through to the SPA handler, which returns `index.html`. Confirm the Caddyfile has the `handle @mcp { reverse_proxy backend:8000 { flush_interval -1 } }` block (same buffering fix as chat) and redeploy. |
 | Instance got deleted | It was idle >7 days — recreate and add the Phase 7 keep-alive cron (or upgrade to PAYG). |

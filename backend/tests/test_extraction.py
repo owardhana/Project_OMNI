@@ -138,7 +138,7 @@ def test_parse_verdict_ok_and_bad():
 
 
 def _verdict(edge_type, sid, oid, skind, okind):
-    return RelationVerdict(edge_type, sid, skind, oid, okind, True, "affirm", 0.9, "x", "1", "s")
+    return RelationVerdict(edge_type, sid, skind, oid, okind, True, "affirm", 0.9, "x", "1", "s", "test-model")
 
 
 def test_triple_key_symmetric_and_directed():

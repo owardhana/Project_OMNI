@@ -55,6 +55,17 @@ INDEX_STATEMENTS: list[str] = [
     FOR (n:Disease) ON (n.embedding)
     OPTIONS {indexConfig: {`vector.dimensions`: 1536, `vector.similarity_function`: 'cosine'}}
     """,
+    # Feature 2 P3 — the literature backfill runs forward (nightly) + backward
+    # (historical) cursors concurrently, so `MERGE (ce:CandidateEdge {triple_key})`
+    # can now race on the same key. A UNIQUENESS CONSTRAINT (not a plain index) is
+    # required: without it, concurrent MERGE creates DUPLICATE CandidateEdge nodes,
+    # which corrupts the per-node n_affirm/confidence recompute in stage.py. The
+    # constraint also provides the backing index MERGE needs to avoid a label scan.
+    "CREATE CONSTRAINT candidate_edge_tk IF NOT EXISTS FOR (ce:CandidateEdge) REQUIRE ce.triple_key IS UNIQUE",
+    # One CandidateEvidence per (triple_key, pmid); MERGEd on that pair in stage.py.
+    "CREATE CONSTRAINT candidate_evidence_tk_pmid IF NOT EXISTS FOR (ev:CandidateEvidence) REQUIRE (ev.triple_key, ev.pmid) IS UNIQUE",
+    # Singleton progress cursors (name = 'forward-catchup' | 'backward-historical').
+    "CREATE CONSTRAINT extraction_cursor_name IF NOT EXISTS FOR (c:ExtractionCursor) REQUIRE c.name IS UNIQUE",
 ]
 
 _driver: AsyncDriver | None = None
